@@ -36,12 +36,26 @@ object BluetoothHelper {
             AppLog.w("BluetoothHelper: Standard adapter $action failed: ${e.message}")
         }
 
-        // 2. Privileged shell / Self-ADB fallback (cmd bluetooth_manager / svc bluetooth)
-        val cmd = "cmd bluetooth_manager $action 2>/dev/null || svc bluetooth $action 2>/dev/null"
+        // 2. Privileged shell / Self-ADB fallback.
+        //
+        // The two verbs are issued independently rather than chained with `||`: on several OEM
+        // stacks `cmd bluetooth_manager disable` returns success while quietly doing nothing, so the
+        // short-circuit would never reach `svc bluetooth`, which is often the one that actually works.
+        // Each one is issued on its own line and its output is captured so a failure is visible in
+        // the log instead of silenced behind `2>/dev/null` — that silence is exactly why this path
+        // used to look like it "ran" while the radio stayed up.
         try {
             val targetScope = scope ?: CoroutineScope(Dispatchers.IO)
             targetScope.launch(Dispatchers.IO) {
-                AdbManager.exec(context, cmd)
+                val probe = "bluetooth.on"
+                val out = AdbManager.exec(context, "$action; cmd bluetooth_manager $action; svc bluetooth $action; getprop $probe; dumpsys bluetooth_manager | grep -i 'State:' | head -n 1").second
+                val nowEnabled = try { getBluetoothAdapter(context)?.isEnabled } catch (_: Exception) { null }
+                AppLog.i("BluetoothHelper: shell $action done. target=$enabled stateNow=$nowEnabled\n$out")
+                if (nowEnabled == enabled) {
+                    AppLog.i("BluetoothHelper: Bluetooth is ${if (enabled) "on" else "off"} as requested.")
+                } else {
+                    AppLog.w("BluetoothHelper: Bluetooth did not reach the requested $action state (now=${nowEnabled ?: "unknown"}).")
+                }
             }
         } catch (e: Exception) {
             AppLog.w("BluetoothHelper: Shell $action failed: ${e.message}")

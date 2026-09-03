@@ -63,7 +63,16 @@ object AdbManager {
             }
 
             val outputBuilder = StringBuilder()
+            // Safety net: a command that leaves the exec stream open (e.g. a daemon launched without
+            // proper detachment) would otherwise be read until the process dies — potentially never,
+            // freezing whatever UI is waiting on the result. Bound the read to a hard timeout.
+            val maxReadMs = 15_000L
+            val readStart = System.currentTimeMillis()
             while (!activeStream.isClosed) {
+                if (System.currentTimeMillis() - readStart > maxReadMs) {
+                    AppLog.w("AdbManager: read timed out after ${maxReadMs}ms for '$command' — closing stream.")
+                    break
+                }
                 try {
                     val data = activeStream.read()
                     if (data.isNotEmpty()) {
