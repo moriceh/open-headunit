@@ -29,7 +29,7 @@ object BtAutoStartRearmPolicy {
         handshakeActive: Boolean?,
         attemptInFlight: Boolean?
     ): Boolean =
-        mode == WifiLauncherMode.NATIVE &&
+        (mode == WifiLauncherMode.NATIVE || mode == WifiLauncherMode.BLINK) &&
             !sessionUp &&
             handshakeActive != true &&
             attemptInFlight != true

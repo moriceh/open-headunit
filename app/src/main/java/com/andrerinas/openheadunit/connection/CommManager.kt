@@ -587,7 +587,7 @@ class CommManager(
                 }
             }
             if (settings.disableBtDuringProjection) {
-                BluetoothHelper.setBluetoothEnabled(context, false, _scope)
+                BluetoothHelper.setBluetoothEnabled(context, false)
             }
         } catch (e: Exception) {
             _connectionState.emit(ConnectionState.Error("Start reading failed: ${e.message}"))
@@ -999,7 +999,7 @@ class CommManager(
             // user has MS9120 output enabled and will connect a phone again.
             com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onAndroidAutoDisconnected()
             if (settings.disableBtDuringProjection) {
-                BluetoothHelper.setBluetoothEnabled(context, true, _scope)
+                BluetoothHelper.setBluetoothEnabled(context, true)
             }
         } catch (e: Exception) {
             AppLog.e("doDisconnect error: ${e.message}")

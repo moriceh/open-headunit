@@ -17,8 +17,10 @@ class AutoStartReceiver : BroadcastReceiver() {
         val action = intent.action
         // Use device-protected storage so the BT MACs are readable during locked boot
         val targetMacs = Settings.getAutoStartBtMacs(context)
+        val settings = com.andrerinas.openheadunit.App.provide(context).settings
+        val isBlinkMode = settings.wifiConnectionMode == com.andrerinas.openheadunit.connection.wifi.WifiLauncherMode.BLINK
 
-        if (targetMacs.isEmpty()) return
+        if (targetMacs.isEmpty() && !isBlinkMode) return
         
         val isLocked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && 
                       !(context.getSystemService(Context.USER_SERVICE) as UserManager).isUserUnlocked
@@ -48,7 +50,15 @@ class AutoStartReceiver : BroadcastReceiver() {
 
             AppLog.i("BT Device connected: ${device?.name} (${device?.address})")
 
-            if (device != null && targetMacs.contains(device.address)) {
+            val isMatch = device != null && (targetMacs.contains(device.address) || isBlinkMode)
+            if (isMatch && device != null) {
+                if (isBlinkMode && !targetMacs.contains(device.address)) {
+                    AppLog.i("AutoStartReceiver: Auto-saving Blink device ${device.name} (${device.address}) to auto-start MACs")
+                    val updated = (targetMacs - "00:00:00:00:00:00") + device.address
+                    settings.autoStartBluetoothDeviceMacs = updated
+                    settings.autoStartBluetoothDeviceName = device.name ?: "Phone"
+                    Settings.syncAutoStartBtMacsToDeviceStorage(context, updated)
+                }
                 AppLog.i("MATCH! Starting AapService via Bluetooth Auto-start...")
 
                 // Start the service to make the app alive. Explicit action so onStartCommand

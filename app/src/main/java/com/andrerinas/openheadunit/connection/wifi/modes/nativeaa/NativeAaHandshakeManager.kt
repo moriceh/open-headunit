@@ -6,8 +6,12 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import com.andrerinas.openheadunit.aap.AapService
+import com.andrerinas.openheadunit.connection.wifi.WifiLauncherMode
 
 import com.andrerinas.openheadunit.utils.BluetoothHelper
 import com.andrerinas.openheadunit.aap.protocol.proto.Wireless
@@ -24,6 +28,7 @@ import com.andrerinas.openheadunit.App
 import com.andrerinas.openheadunit.connection.CommManager
 import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherNative
 import com.andrerinas.openheadunit.utils.Settings
+import com.andrerinas.openheadunit.utils.HotspotManager
 import java.io.DataInputStream
 import java.io.OutputStream
 import java.util.*
@@ -269,6 +274,53 @@ class NativeAaHandshakeManager(
     // deciding whether it's safe to force-reinit should check this instead of isActive() alone.
     fun isAttemptInFlight(): Boolean = isHandshakeInFlight() || pokeAttemptInFlight || isHandoffSettling()
 
+    private var aclConnectedReceiver: BroadcastReceiver? = null
+
+    private fun registerAclReceiver() {
+        if (aclConnectedReceiver != null) return
+        val filter = IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED)
+        aclConnectedReceiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.action == BluetoothDevice.ACTION_ACL_CONNECTED) {
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
+                    if (device != null) {
+                        AppLog.i("NativeAA: Bluetooth device connected (${device.name} / ${device.address})")
+                        if (externalBtDiagnostic() != null || settings.wifiConnectionMode == WifiLauncherMode.BLINK) {
+                            val macs = settings.autoStartBluetoothDeviceMacs
+                            if (!macs.contains(device.address)) {
+                                val updated = (macs - "00:00:00:00:00:00") + device.address
+                                settings.autoStartBluetoothDeviceMacs = updated
+                                settings.autoStartBluetoothDeviceName = device.name ?: "Phone"
+                                Settings.syncAutoStartBtMacsToDeviceStorage(context, updated)
+                            }
+                            if (!commManager.isConnected && commManager.connectionState.value !is CommManager.ConnectionState.Connecting) {
+                                AppLog.i("NativeAA-ZXW: Device connected via Bluetooth, restarting ZXW bridge immediately...")
+                                restartZxwBridge()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try {
+            ContextCompat.registerReceiver(context, aclConnectedReceiver!!, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (_: Exception) {
+            try { context.registerReceiver(aclConnectedReceiver, filter) } catch (_: Exception) {}
+        }
+    }
+
+    private fun unregisterAclReceiver() {
+        aclConnectedReceiver?.let {
+            try { context.unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        aclConnectedReceiver = null
+    }
+
     @SuppressLint("MissingPermission")
     fun start() {
         if (isRunning) return
@@ -279,6 +331,8 @@ class NativeAaHandshakeManager(
         externalBtDiagnostic()?.let {
             AppLog.i("NativeAA: Choiceway/ZXW Bluetooth detected ($it) - Starting ZXW Bridge on 127.0.0.1:3152 / /dev/BT_serial...")
         }
+
+        registerAclReceiver()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
@@ -1012,6 +1066,26 @@ class NativeAaHandshakeManager(
     }
 
     /**
+     * Brings the head unit's access point up through the app's root Self-ADB the moment the
+     * Blink/ZXW WPP handshake starts, when the user opted into that in Settings.
+     *
+     * The WPP handshake is when the phone is about to be handed the credentials and told to join,
+     * so the network has to be up before that — this is the trigger. Only the external-BT
+     * (Choiceway/ZXW) route reaches it, matching the setting's "Blink/ZXW only" availability, and
+     * only when [Settings.autoEnableHotspotSelfAdB] is on; otherwise it is a no-op. It runs off the
+     * shared handshake loop in its own coroutine, because it waits for the access point to come up
+     * and must not hold the WPP state machine's read.
+     */
+    private fun startSelfAdBHotspotIfEnabled() {
+        if (externalBtDiagnostic() == null) return
+        if (!settings.autoEnableHotspotSelfAdB) return
+        AppLog.i("NativeAA-ZXW: WPP handshake started — bringing the hotspot up via Self-ADB (2.4 GHz, WPA2).")
+        scope.launch(Dispatchers.IO + CoroutineName("NativeAa-SelfAdB-Hotspot")) {
+            HotspotManager.startViaSelfAdB(context)
+        }
+    }
+
+    /**
      * Forces the ZXW/Blink bridge to restart by closing the active socket.
      * The bridge loop catches the exception and reconnects after 3 s, re-sending the 0x0101
      * activation command which wakes the phone via the Feasycom/ZXW Bluetooth chip.
@@ -1268,6 +1342,10 @@ class NativeAaHandshakeManager(
                         // is otherwise no UI feedback (the user is often on another app), so bring
                         // the app to the front and show the "Android Auto is starting…" overlay.
                         notifyBlinkHandshakeStarted()
+                        // Same moment, same gate: this is when the phone will be told the
+                        // credentials, so the hotspot has to be up already. No-op unless the user
+                        // opted into the Self-ADB start, and only reached on the Blink/ZXW route.
+                        startSelfAdBHotspotIfEnabled()
                         // The phone answered, so the channel carries data in at least one
                         // direction. Whatever the type turns out to be, this was not a silent unit.
                         ifOwner(rawBtSocket) {
@@ -1332,10 +1410,25 @@ class NativeAaHandshakeManager(
             val credentialsDeadline = SystemClock.elapsedRealtime() + CREDENTIALS_WAIT_MS
             var lastRefreshAt = SystemClock.elapsedRealtime()
             var lastProgressLogAt = SystemClock.elapsedRealtime()
+            var lastType4RetryAt = SystemClock.elapsedRealtime()
             while (credentials == null && isRunning && isActive &&
                 !session.isTerminal() && SystemClock.elapsedRealtime() < credentialsDeadline) {
                 val now = SystemClock.elapsedRealtime()
                 val waitedS = (CREDENTIALS_WAIT_MS - (credentialsDeadline - now)) / 1000
+
+                // If in SelfADB hotspot mode, ensure the hotspot is up if not resolved yet
+                if (settings.autoEnableHotspotSelfAdB && waitedS >= 2 && waitedS % 6L == 0L) {
+                    AppLog.i("NativeAA: Hotspot credentials still pending after ${waitedS}s — re-verifying SelfADB start...")
+                    scope.launch(Dispatchers.IO) { HotspotManager.startViaSelfAdB(context) }
+                }
+
+                // In Blink mode, if no response has been received from the phone yet, re-send Type 4 every 2.5s
+                if (localRadio == "Choiceway-Blink" && session.messagesReceived == 0 && now - lastType4RetryAt >= 2500) {
+                    lastType4RetryAt = now
+                    AppLog.d("NativeAA-ZXW: Still waiting for WPP response (${waitedS}s) — re-sending WifiVersionRequest (Type 4)...")
+                    try { sendWifiVersionRequest(output) } catch (_: Exception) {}
+                }
+
                 if (now - lastRefreshAt >= 10_000) {
                     lastRefreshAt = now
                     AppLog.w("NativeAA: Still waiting for credentials after ${waitedS}s. Requesting WiFi refresh...")
@@ -1452,7 +1545,16 @@ class NativeAaHandshakeManager(
             // not a grace period, since the phone needs however long it needs. Association has
             // been measured at 21 s on hardware where the 3 s close killed it dead. Wait for the
             // session, and where the phone reports its own progress, let it.
+            var lastType1RetryAt = SystemClock.elapsedRealtime()
             while (isRunning && isActive && !session.isTerminal()) {
+                if (localRadio == "Choiceway-Blink" && session.stage == WppStage.AWAIT_INFO_REQUEST && session.messagesReceived == 0) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastType1RetryAt >= 2500) {
+                        lastType1RetryAt = now
+                        AppLog.d("NativeAA-ZXW: Still waiting for Type 2 response — re-sending WifiStartRequest (Type 1)...")
+                        try { sendWifiStartRequest(output, credIp, 5288) } catch (_: Exception) {}
+                    }
+                }
                 tick(250)
             }
 
@@ -1664,6 +1766,7 @@ class NativeAaHandshakeManager(
 
     fun stop() {
         isRunning = false
+        unregisterAclReceiver()
         try { aaServerSocket?.close() } catch (e: Exception) {}
         try { hfpServerSocket?.close() } catch (e: Exception) {}
         synchronized(extraAaServerSockets) {

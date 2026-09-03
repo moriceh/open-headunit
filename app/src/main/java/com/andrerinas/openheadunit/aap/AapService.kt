@@ -2102,6 +2102,13 @@ class AapService : Service() {
                 userExitedAA = false
                 userExitCooldownUntil = 0L
 
+                if (settings.autoEnableHotspotSelfAdB) {
+                    AppLog.i("AapService: Ensuring hotspot is up via SelfADB on ZXW bridge restart...")
+                    serviceScope.launch(Dispatchers.IO) {
+                        HotspotManager.startViaSelfAdB(this@AapService)
+                    }
+                }
+
                 val activeLauncher = wifiLauncherManager.active
                 if (activeLauncher is WifiLauncherNative) {
                     activeLauncher.handshakeManager?.restartZxwBridge()
@@ -2148,22 +2155,25 @@ class AapService : Service() {
                 }
             }
             ACTION_BT_AUTO_START          -> {
-                // AutoStartReceiver fires this on ACL_CONNECTED from a trusted device. If the
-                // service process was already alive (e.g. survived a prior disconnect/exit in
-                // this same session), onCreate()'s initWifiMode() never re-runs, so a Native AA
-                // mode that was stopped after a user exit (nativeAaHandshakeManager.stop() at
-                // disconnect) would otherwise stay dead forever despite the phone reconnecting.
-                // Only force a re-init when it's actually stopped — on a genuine cold start,
-                // onCreate() already armed everything moments ago and re-running would tear
-                // down and recreate the P2P group (new random SSID/passphrase) right as it's
-                // being delivered to the phone.
-                // The rest of the rule, including why the mode is asked of the setting and never
-                // of the launcher, lives on BtAutoStartRearmPolicy.
                 val sessionUp = commManager.isConnected ||
                     commManager.connectionState.value is CommManager.ConnectionState.Connecting
                 val launcher = wifiLauncherManager.active as? WifiLauncherNative
 
-                if (BtAutoStartRearmPolicy.shouldRearm(
+                if (settings.wifiConnectionMode == WifiLauncherMode.BLINK && !sessionUp) {
+                    AppLog.i("AapService: Bluetooth auto-start in Blink mode — ensuring hotspot and restarting ZXW bridge.")
+                    userExitedAA = false
+                    userExitCooldownUntil = 0L
+                    if (settings.autoEnableHotspotSelfAdB) {
+                        serviceScope.launch(Dispatchers.IO) {
+                            HotspotManager.startViaSelfAdB(this@AapService)
+                        }
+                    }
+                    if (launcher != null) {
+                        launcher.handshakeManager?.restartZxwBridge()
+                    } else {
+                        wifiLauncherManager.setActiveFromSettings(force = true)
+                    }
+                } else if (BtAutoStartRearmPolicy.shouldRearm(
                         settings.wifiConnectionMode,
                         sessionUp,
                         launcher?.handshakeManager?.isActive(),

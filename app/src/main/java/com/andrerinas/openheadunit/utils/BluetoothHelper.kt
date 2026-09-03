@@ -12,12 +12,17 @@ import com.andrerinas.openheadunit.utils.adb.AdbManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.lang.reflect.Constructor
 
 object BluetoothHelper {
 
     fun setBluetoothEnabled(context: Context, enabled: Boolean, scope: CoroutineScope? = null) {
         val action = if (enabled) "enable" else "disable"
+        val stateInt = if (enabled) 1 else 0
         AppLog.i("BluetoothHelper: Setting Bluetooth state -> $action")
 
         // 1. Standard Android Adapter API
@@ -36,25 +41,36 @@ object BluetoothHelper {
             AppLog.w("BluetoothHelper: Standard adapter $action failed: ${e.message}")
         }
 
-        // 2. Privileged shell / Self-ADB fallback.
-        //
-        // The two verbs are issued independently rather than chained with `||`: on several OEM
-        // stacks `cmd bluetooth_manager disable` returns success while quietly doing nothing, so the
-        // short-circuit would never reach `svc bluetooth`, which is often the one that actually works.
-        // Each one is issued on its own line and its output is captured so a failure is visible in
-        // the log instead of silenced behind `2>/dev/null` — that silence is exactly why this path
-        // used to look like it "ran" while the radio stayed up.
+        // 2. Privileged shell / Self-ADB fallback with verification & retry loop.
+        // Uses a robust NonCancellable supervisor scope so caller cancellation does not kill the command mid-flight.
         try {
-            val targetScope = scope ?: CoroutineScope(Dispatchers.IO)
-            targetScope.launch(Dispatchers.IO) {
-                val probe = "bluetooth.on"
-                val out = AdbManager.exec(context, "$action; cmd bluetooth_manager $action; svc bluetooth $action; getprop $probe; dumpsys bluetooth_manager | grep -i 'State:' | head -n 1").second
-                val nowEnabled = try { getBluetoothAdapter(context)?.isEnabled } catch (_: Exception) { null }
-                AppLog.i("BluetoothHelper: shell $action done. target=$enabled stateNow=$nowEnabled\n$out")
-                if (nowEnabled == enabled) {
-                    AppLog.i("BluetoothHelper: Bluetooth is ${if (enabled) "on" else "off"} as requested.")
-                } else {
-                    AppLog.w("BluetoothHelper: Bluetooth did not reach the requested $action state (now=${nowEnabled ?: "unknown"}).")
+            val targetScope = scope ?: CoroutineScope(Dispatchers.IO + SupervisorJob())
+            targetScope.launch(Dispatchers.IO + NonCancellable) {
+                val shellCmd = "cmd bluetooth_manager $action; svc bluetooth $action; settings put global bluetooth_on $stateInt"
+                val out = AdbManager.exec(context, "$shellCmd; getprop bluetooth.on; dumpsys bluetooth_manager | grep -i 'State:' | head -n 1").second
+                AppLog.i("BluetoothHelper: shell $action initial output: $out")
+
+                // Android Bluetooth state transition is asynchronous (takes 500ms - 2000ms).
+                // Poll every 500ms up to 3000ms to confirm the adapter reached the target state.
+                var confirmed = false
+                for (attempt in 1..6) {
+                    delay(500)
+                    val isNowEnabled = try { getBluetoothAdapter(context)?.isEnabled } catch (_: Exception) { null }
+                    if (isNowEnabled == enabled) {
+                        AppLog.i("BluetoothHelper: Bluetooth state successfully reached -> $action (attempt $attempt)")
+                        confirmed = true
+                        break
+                    }
+                    if (attempt == 3) {
+                        // Re-issue shell commands once midway if still not changed
+                        AppLog.d("BluetoothHelper: Bluetooth still not $action after 1.5s, re-triggering shell commands...")
+                        AdbManager.exec(context, shellCmd)
+                    }
+                }
+
+                if (!confirmed) {
+                    val finalState = try { getBluetoothAdapter(context)?.isEnabled } catch (_: Exception) { null }
+                    AppLog.w("BluetoothHelper: Bluetooth did not reach the requested $action state (final=${finalState ?: "unknown"}).")
                 }
             }
         } catch (e: Exception) {
