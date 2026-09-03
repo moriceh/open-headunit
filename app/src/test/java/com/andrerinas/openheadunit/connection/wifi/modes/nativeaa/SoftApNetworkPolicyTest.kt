@@ -142,6 +142,22 @@ class SoftApNetworkPolicyTest {
     }
 
     @Test
+    fun `the Qualcomm cellular data interface is not an access point`() {
+        // The live shape from a GT7/Choiceway head unit: the real AP runs on wlan2, and when its
+        // own address had not yet settled, rmnet_data1 (the cellular modem, 10.35.200.168) was the
+        // only up interface with a site-local IPv4, so it was advertised as the access point.
+        assertNull(
+            SoftApNetworkPolicy.pickApInterface(listOf(iface("rmnet_data1", ipv4 = "10.35.200.168")))
+        )
+        assertEquals(
+            "wlan2",
+            SoftApNetworkPolicy.pickApInterface(
+                listOf(iface("rmnet_data1", ipv4 = "10.35.200.168"), iface("wlan2", ipv4 = "192.168.54.228"))
+            )?.name
+        )
+    }
+
+    @Test
     fun `an interface named for the station role is excluded`() {
         assertNull(SoftApNetworkPolicy.pickApInterface(listOf(iface("sta0"))))
         assertEquals(

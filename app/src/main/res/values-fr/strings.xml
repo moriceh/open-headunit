@@ -762,6 +762,8 @@
 
     <string name="auto_enable_hotspot">Auto-activer le point d\'accès</string>
     <string name="auto_enable_hotspot_description">Démarre automatiquement un point d\'accès Wi-Fi sur cet appareil. (Ne fonctionnera pas sur tous les appareils)</string>
+    <string name="auto_enable_hotspot_selfadb">Activer point d\'accès via SelfADB</string>
+    <string name="auto_enable_hotspot_selfadb_description">Démarrage du point d\'accès Wi-Fi de la tablette via le shell root de l\'appli (Self-ADB) dès le début de la poignée de main sans fil. Utilise le nom et le mot de passe déjà configurés, toujours en 2,4 GHz. Disponible uniquement sur les unités Blink/ZXW.</string>
     <string name="hotspot_warning_title">Fonctionnalité expérimentale</string>
     <string name="hotspot_warning_message">Cette fonctionnalité utilise la réflexion et pourrait ne pas fonctionner sur tous les appareils. Elle peut également nécessiter d\'accorder manuellement la permission \"Modifier les paramètres système\".</string>
     <string name="hotspot_permission_title">Permission requise</string>

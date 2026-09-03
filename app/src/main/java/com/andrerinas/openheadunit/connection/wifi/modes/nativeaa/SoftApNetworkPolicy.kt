@@ -49,11 +49,19 @@ object SoftApNetworkPolicy {
      * there is signal, so with the real access point down it was the only candidate left and got
      * advertised as one — the right network name against an address no phone could reach.
      *
+     * `rmnet*` is the Qualcomm cellular data interface (`rmnet_data0`, `rmnet_data1`, …), the
+     * same trap spelled the way this radio family spells it. Measured on a GT7/Choiceway head
+     * unit: the real soft AP runs on `wlan2`, but when the AP's own address had not yet settled,
+     * `rmnet_data1` was the only up interface with a site-local IPv4, so it was advertised as the
+     * access point — the right SSID (taken from the manual override) against the modem's cellular
+     * address, with no BSSID. The phone then refused to associate (WifiConnectStatus -11) on
+     * every retry. A cellular interface is never a soft AP, so it must lose to nothing.
+     *
      * This list is a guess about which unknown interfaces are *not* access points, and it has
-     * needed extending three times. [NativeCredentialsPolicy.shouldPublishCredentials] is the
+     * needed extending four times. [NativeCredentialsPolicy.shouldPublishCredentials] is the
      * defence that does not depend on knowing every name in advance.
      */
-    private val EXCLUDED_PREFIXES = listOf("p2p-", "tun", "dummy", "apcli", "sta", "seth_lte")
+    private val EXCLUDED_PREFIXES = listOf("p2p-", "tun", "dummy", "apcli", "sta", "seth_lte", "rmnet")
 
     /**
      * The interface most likely to be our access point, or null if none qualifies. Must be up and

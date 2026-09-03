@@ -9,8 +9,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.ApBand
+import com.andrerinas.openheadunit.utils.adb.AdbManager
 import com.android.dx.DexMaker
 import com.android.dx.TypeId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import java.lang.reflect.Method
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -107,6 +110,16 @@ object HotspotManager {
         // SoftApConfigCompat.enableHotspot() returns before reading it when enabled is false.
         if (!enabled) return startOnBand(context, enabled = false, band = ApBand.BAND_5GHZ).attempted
 
+        // A fresh ask against an access point that is already up would re-post every start path and
+        // churn the live radio — the "auto-start turned off a hotspot that was on" case. Confirm the
+        // access point first, and return without touching the radio when it is already there. This
+        // check is what makes a repeated auto-enable (the credentials provider asks again on every
+        // "still waiting" refresh, and once more when the AP drops) safe rather than destructive.
+        if (isApUp(context)) {
+            AppLog.i("HotspotManager: The hotspot is already up; not re-posting start requests (avoids churning a live access point).")
+            return true
+        }
+
         // Claimed before anything slow runs, or the WiFi-disable sleep below is long enough for a
         // second caller to walk straight past the check.
         synchronized(this) {
@@ -180,8 +193,19 @@ object HotspotManager {
                 return true
             }
 
-            if (attemptedAny) {
-                AppLog.w("HotspotManager: Every start path was tried on ${order.joinToString { SoftApBandPolicy.describe(it) }} and no access point came up within ${AP_STATE_TIMEOUT_MS / 1000}s each. On a non-privileged install this usually cannot be done from an app — switch the hotspot on in system settings instead.")
+            // The framework's start paths above need TETHER_PRIVILEGED, which a normal (non-system)
+            // install of this app does not hold, so on many head units they are refused and the
+            // hotspot stays off even though the app asked for it. Bring it up through the app's own
+            // privileged shell instead. Reached only when nothing above brought an access point up
+            // (a live one already returned at the top of this method), so this cannot churn an AP.
+            val shellOutcome = startViaShell(context)
+            if (shellOutcome.up) {
+                AppLog.i("HotspotManager: Hotspot started via the privileged shell fallback (cmd wifi start-softap).")
+                return true
+            }
+
+            if (attemptedAny || shellOutcome.attempted) {
+                AppLog.w("HotspotManager: Every start path was tried on ${order.joinToString { SoftApBandPolicy.describe(it) }} and no access point came up within ${AP_STATE_TIMEOUT_MS / 1000}s each, including the privileged shell fallback. On a unit without a root shell this usually cannot be done from an app — switch the hotspot on in system settings instead.")
             } else {
                 AppLog.w("HotspotManager: All hotspot attempts failed.")
             }
@@ -264,6 +288,215 @@ object HotspotManager {
         // active or in recovering") while this method reported success and logged nothing at all.
         // Only "an access point is up" is worth reporting as success.
         return BandOutcome(attempted, up = awaitApUp(context), configured = configured)
+    }
+
+    /**
+     * The outcome of the privileged shell start: whether a `start-softap` command was actually
+     * issued (so the "every path was tried" report is accurate) and whether an access point is up
+     * as a result.
+     */
+    private data class ShellStartOutcome(val attempted: Boolean, val up: Boolean)
+
+    /**
+     * Brings the head unit's access point up through the app's own privileged shell, as a last
+     * resort when the framework's start paths are unavailable — which is the normal case on a
+     * head unit where this app is a user install without `TETHER_PRIVILEGED`, so
+     * `TetheringManager.startTethering` and `ConnectivityManager.startTethering` are refused.
+     *
+     * `cmd wifi start-softap` needs no such permission when issued from a root shell, and the
+     * Self-ADB `adbd` on these units runs as `u:r:su:s0`. The name, passphrase and security type it
+     * is told are read from the stored configuration — the same source of truth this app hands the
+     * phone (`SoftApCredentialsProvider`) — so the access point it brings up is exactly the one the
+     * phone was told to join.
+     *
+     * Returns without issuing anything when there is no stored network to host, when no privileged
+     * shell can be reached, or when the stored security type is one `start-softap` cannot host. In
+     * all of those the caller falls through to its "no access point came up" report.
+     */
+    private fun startViaShell(context: Context): ShellStartOutcome {
+        val security = HotspotConfigReader.getSystemHotspotSecurity(context)
+        if (security == null || security.ssid.isEmpty()) {
+            AppLog.w("HotspotManager: Shell start skipped — no stored hotspot name to host. This app can only bring up the network this device is configured to run; set the hotspot in system settings first.")
+            return ShellStartOutcome(attempted = false, up = false)
+        }
+
+        // Host the access point exactly the way this device is configured to run it: the security
+        // type is read off the stored SoftApConfiguration (WPA-PSK + SAE transition on this unit,
+        // which maps to wpa3_transition) rather than assumed. The phone still joins it through the
+        // WPA2-PSK path (its log shows it as WPA2_PERSONAL) — transition mode allows that — so no
+        // client is excluded, and matching the stored type keeps the shell-started access point
+        // identical to the one system settings would bring up.
+        val token = securityTokenFor(security)
+        if (token == null) {
+            AppLog.w("HotspotManager: Shell start skipped — the stored security type (${SoftApSecurityType.fromValue(security.securityType)}) is not a personal-PSK network that `cmd wifi start-softap` can bring up.")
+            return ShellStartOutcome(attempted = false, up = false)
+        }
+
+        // Honor the user's band setting: force 5 GHz or 2.4 GHz, and let the driver choose on
+        // AUTO. 5 GHz is known to be the band a 1080p stream needs, so this is the default path;
+        // it is also the band this class of radio is measured to refuse when hosting an access
+        // point, so a failure here is attributable.
+        val bandFlag = bandFlagFor(bandPreference(context))
+
+        return runStartSoftApCommand(
+            context,
+            ssid = security.ssid,
+            passphrase = security.passphrase,
+            token = token,
+            bandFlag = bandFlag
+        )
+    }
+
+    /**
+     * Brings the head unit's access point up through the app's own root Self-ADB, as the primary
+     * start path (not a fallback) when the Blink/ZXW WPP handshake begins, so the network is up
+     * by the time the phone is handed the credentials.
+     *
+     * Deliberately fixed to 2.4 GHz and WPA2 personal: this class of radio does not host a 5 GHz
+     * access point, and a plain WPA2 network is the most broadly joinable. The name and passphrase
+     * come from the manual overrides when the user set them, otherwise from the stored
+     * configuration, so the network that comes up is the one this app hands the phone.
+     *
+     * Safe to call on the already-up path: it returns without touching the radio when an access
+     * point is running. Runs only from a background (non-main) thread — it waits for the access
+     * point to actually come up.
+     */
+    fun startViaSelfAdB(context: Context): Boolean {
+        if (isApUp(context)) {
+            AppLog.i("HotspotManager: The hotspot is already up; the Self-ADB start is not needed.")
+            return true
+        }
+
+        // The manual overrides are the user's explicit choice of what this device hosts, so they
+        // take precedence over whatever the stored configuration reports.
+        val settings = Settings(context)
+        val manualSsid = settings.hotspotSsid.trim()
+        val ssid = if (manualSsid.isNotEmpty()) manualSsid
+            else HotspotConfigReader.getSystemHotspotSecurity(context)?.ssid.orEmpty()
+        if (ssid.isEmpty()) {
+            AppLog.w("HotspotManager: Self-ADB start skipped — no hotspot name to host. Set 'Hotspot name (manual)' in Settings, or set the hotspot in system settings first.")
+            return false
+        }
+        val manualPassword = settings.hotspotPassword
+        val passphrase = if (manualPassword.isNotEmpty()) manualPassword
+            else HotspotConfigReader.getSystemHotspotSecurity(context)?.passphrase.orEmpty()
+
+        // 2.4 GHz only (this radio does not host 5 GHz) and WPA2 personal (open when there is no
+        // passphrase). No read of the stored security type: the goal is a joinable network, and
+        // the phone takes the WPA2-PSK path either way.
+        return runStartSoftApCommand(context, ssid = ssid, passphrase = passphrase, token = "wpa2", bandFlag = " -b 2").up
+    }
+
+    /**
+     * Issues one `cmd wifi start-softap` call over the Self-ADB shell and reports whether it was
+     * actually sent and whether an access point is up as a result. Shared by the last-resort
+     * auto-enable ([startViaShell]) and the WPP-handshake-triggered start ([startViaSelfAdB]),
+     * which differ only in the ssid / passphrase / token / band they feed it.
+     */
+    private fun runStartSoftApCommand(
+        context: Context,
+        ssid: String,
+        passphrase: String,
+        token: String,
+        bandFlag: String
+    ): ShellStartOutcome {
+        // The passphrase, if any, goes in double quotes so a value with shell-meaningful
+        // characters (quotes, spaces) reaches the command intact.
+        val passphraseArg = if (passphrase.isEmpty()) {
+            // An open network takes no passphrase argument; the token itself says so.
+            ""
+        } else {
+            " \"$passphrase\""
+        }
+        val command = "cmd wifi start-softap \"$ssid\" $token$passphraseArg$bandFlag"
+        AppLog.i("HotspotManager: Starting the hotspot via the privileged shell: $command")
+
+        // AdbManager.exec is suspend and already hops to Dispatchers.IO; the callers run on the
+        // same IO thread, so runBlocking here cannot nest into a second hop and just waits for the
+        // command's output.
+        val (code, out) = runBlocking { AdbManager.exec(context, command) }
+        if (code == -1) {
+            // -1 is the channel's own failure, not the command's: adbd on 127.0.0.1:5555 could not
+            // even be reached, so the privileged start was never issued. A different and, on these
+            // units, more common reason than the command being refused — the radio has not been
+            // touched at all, so there is nothing further to do from here.
+            AppLog.e("HotspotManager: Privileged shell start not attempted — the Self-ADB channel could not reach adbd on 127.0.0.1:5555 ($out). The command was never issued, so the framework start paths above remain the only option from an app on this device.")
+            return ShellStartOutcome(attempted = false, up = false)
+        }
+
+        // AdbManager.exec reports exit 0 for any command that actually reached the shell: it does
+        // not read adbd's exit-status packet, so a refused `cmd wifi` call comes back 0 with the
+        // error text on the stream. The exit code is therefore useless as a success signal — the
+        // only one is "an access point is up" — but the output text is the only way to say *why*
+        // it did not come up when it did not: a permission refusal and a radio that declined are
+        // different bugs, and both are silent in the exit code.
+        val up = awaitApUp(context)
+        if (up) {
+            AppLog.i("HotspotManager: Hotspot came up after the privileged shell start.")
+        } else {
+            AppLog.w("HotspotManager: The privileged shell reported success but no access point came up within ${AP_STATE_TIMEOUT_MS / 1000}s. ${refusalReason(out)}")
+        }
+        return ShellStartOutcome(attempted = true, up = up)
+    }
+
+    /**
+     * The security token `cmd wifi start-softap` accepts, from the stored security type. Null when
+     * the type is not a personal-PSK network the command can host.
+     */
+    private fun securityTokenFor(security: HotspotConfigReader.HotspotSecurity): String? =
+        when (SoftApSecurityType.fromValue(security.securityType)) {
+            SoftApSecurityType.OPEN -> "open"
+            SoftApSecurityType.WPA2_PERSONAL -> "wpa2"
+            SoftApSecurityType.WPA3_PERSONAL -> "wpa3"
+            SoftApSecurityType.WPA3_TRANSITION -> "wpa3_transition"
+            SoftApSecurityType.OWE -> "owe"
+            // UNSPECIFIED (the API < 30 path, which cannot read the type) and the enterprise
+            // variants: the command takes a personal passphrase only, and guessing the type would
+            // host the wrong kind of network, so refuse to guess and let the caller report it.
+            else -> {
+                if (security.securityType == SoftApSecurityType.UNSPECIFIED.value &&
+                    security.passphrase.isNotEmpty()) {
+                    // Legacy WifiConfiguration says nothing about the security type, but a
+                    // passphrase that is present is WPA2-personal on essentially every unit that
+                    // still carries getWifiApConfiguration. This is the one place the type is
+                    // inferred, and it is the only one with no better source.
+                    AppLog.i("HotspotManager: Security type unreadable on this API; assuming WPA2 personal from the presence of a passphrase.")
+                    "wpa2"
+                } else null
+            }
+        }
+
+    /**
+     * What a failed `cmd wifi start-softap` run tells us, or a bare echo of the output when nothing
+     * diagnostic is there.
+     *
+     * adbd's `exec:` stream merges the command's stderr into the same buffer as its stdout, so the
+     * framework's refusal text lands here too; reading it is the only way to name the failure,
+     * because the exit code is discarded upstream.
+     */
+    private fun refusalReason(output: String): String {
+        val text = output.trim()
+        if (text.isEmpty()) return "No output from the shell."
+        return when {
+            text.contains("SecurityException", ignoreCase = true) ||
+                text.contains("Permission denied", ignoreCase = true) ||
+                text.contains("START_SOFT_AP", ignoreCase = true) ->
+                "the framework refused the privileged start (the shell's uid does not hold android.permission.START_SOFT_AP on this unit), which no amount of shell access overrides. Output: $text"
+            text.contains("unknown command", ignoreCase = true) ||
+                text.contains("usage:", ignoreCase = true) ->
+                "this build of `cmd wifi` does not expose the start-softap verb, so no shell start is possible here. Output: $text"
+            else -> "Output: $text"
+        }
+    }
+
+    /**
+     * The `-b` flag for `cmd wifi start-softap` from the user's band preference. Empty on AUTO:
+     * the driver chooses, which is the safe default on a radio that may not host 5 GHz.
+     */
+    private fun bandFlagFor(preference: HotspotBandPreference): String = when (preference) {
+        HotspotBandPreference.AUTO -> ""
+        HotspotBandPreference.FORCE_5GHZ -> " -b 5"
+        HotspotBandPreference.FORCE_2_4GHZ -> " -b 2"
     }
 
     /**

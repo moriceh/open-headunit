@@ -912,6 +912,8 @@
 
     <string name="auto_enable_hotspot">Auto-Enable Hotspot</string>
     <string name="auto_enable_hotspot_description">Automatically starts a Wi-Fi hotspot on this device. (Won\'t work on every device)</string>
+    <string name="auto_enable_hotspot_selfadb">Enable hotspot via Self-ADB</string>
+    <string name="auto_enable_hotspot_selfadb_description">Starts the head unit\'s Wi-Fi hotspot through the app\'s own root shell (Self-ADB) as soon as the wireless handshake begins. Uses the already-configured name and password, always on 2.4 GHz. Only available on Blink/ZXW units.</string>
     <string name="hotspot_warning_title">Experimental Feature</string>
     <string name="hotspot_warning_message">This feature uses reflection and might not work on all devices. It may also require the \"Modify system settings\" permission to be granted manually.</string>
     <string name="hotspot_permission_title">Permission Required</string>

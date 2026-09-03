@@ -159,6 +159,7 @@ class SettingsFragment : Fragment() {
     private var pendingWifiConnectionMode: WifiLauncherMode? = null
     private var pendingHelperConnectionStrategy: HelperStrategy? = null
     private var pendingAutoEnableHotspot: Boolean? = null
+    private var pendingAutoEnableHotspotSelfAdB: Boolean? = null
     private var pendingWaitForWifi: Boolean? = null
     private var pendingWaitForWifiTimeout: Int? = null
     private var pendingBluetoothManagerServiceName: String? = null
@@ -323,6 +324,7 @@ class SettingsFragment : Fragment() {
         pendingKillOnDisconnect = settings.killOnDisconnect
         pendingRaiseProjectionDuringCall = settings.raiseProjectionDuringCall
         pendingAutoEnableHotspot = settings.autoEnableHotspot
+        pendingAutoEnableHotspotSelfAdB = settings.autoEnableHotspotSelfAdB
         pendingFakeSpeed = settings.fakeSpeed
         pendingUseLibusb = settings.useLibusb
 
@@ -452,6 +454,7 @@ class SettingsFragment : Fragment() {
         pendingKillOnDisconnect = settings.killOnDisconnect
         pendingRaiseProjectionDuringCall = settings.raiseProjectionDuringCall
         pendingAutoEnableHotspot = settings.autoEnableHotspot
+        pendingAutoEnableHotspotSelfAdB = settings.autoEnableHotspotSelfAdB
         pendingFakeSpeed = settings.fakeSpeed
         pendingUseLibusb = settings.useLibusb
         // Cluster display / MS9120 USB output
@@ -610,6 +613,7 @@ class SettingsFragment : Fragment() {
         pendingKillOnDisconnect?.let { settings.killOnDisconnect = it }
         pendingRaiseProjectionDuringCall?.let { settings.raiseProjectionDuringCall = it }
         pendingAutoEnableHotspot?.let { settings.autoEnableHotspot = it }
+        pendingAutoEnableHotspotSelfAdB?.let { settings.autoEnableHotspotSelfAdB = it }
         pendingFakeSpeed?.let { settings.fakeSpeed = it }
         pendingUseLibusb?.let { settings.useLibusb = it }
 
@@ -764,6 +768,7 @@ class SettingsFragment : Fragment() {
                         pendingKillOnDisconnect != settings.killOnDisconnect ||
                         pendingRaiseProjectionDuringCall != settings.raiseProjectionDuringCall ||
                         pendingAutoEnableHotspot != settings.autoEnableHotspot ||
+                        pendingAutoEnableHotspotSelfAdB != settings.autoEnableHotspotSelfAdB ||
                         pendingFakeSpeed != settings.fakeSpeed ||
                         pendingWifiConnectionMode != settings.wifiConnectionMode ||
                         pendingHelperConnectionStrategy != settings.helperConnectionStrategy ||
@@ -1054,6 +1059,11 @@ class SettingsFragment : Fragment() {
                 // belongs here. It used to render only on mode 1 and mode 2 strategy 4, which left
                 // the setting governing this route unreachable from the screen that selects it.
                 addHotspotToggle(items)
+                // Separate from autoEnableHotspot: bring the AP up through the app's own root
+                // Self-ADB when the WPP handshake starts. Only rendered on a Blink/ZXW unit,
+                // which is where the WPP handshake is the moment the phone is told the
+                // credentials and therefore needs the network up already.
+                addHotspotSelfAdBToggle(items)
                 addHotspotBandSetting(items)
 
                 // The automatic read goes through the same non-public API that a locked-down
@@ -4053,6 +4063,28 @@ class SettingsFragment : Fragment() {
                     checkChanges()
                     updateSettingsList()
                 }
+            }
+        ))
+    }
+
+    // Separate from [addHotspotToggle]: starts the head unit's own access point through the app's
+    // root Self-ADB (cmd wifi start-softap) at the start of the WPP handshake. Gated to Blink/ZXW
+    // units only — that is where the WPP handshake runs over the external BT bridge and is the
+    // moment the phone is handed the credentials. Unlike [addHotspotToggle] it needs no
+    // WRITE_SETTINGS grant: the privileged start goes over Self-ADB, not the framework API.
+    private fun addHotspotSelfAdBToggle(items: MutableList<SettingItem>) {
+        // The trigger (first WPP byte) is only reachable on the Blink/ZXW bridge, detected by the
+        // external-BT evidence. On any other unit this toggle would be inert, so it is hidden.
+        if (NativeAaHandshakeManager.externalBtDiagnostic() == null) return
+        items.add(SettingItem.ToggleSettingEntry(
+            stableId = "autoEnableHotspotSelfAdB",
+            nameResId = R.string.auto_enable_hotspot_selfadb,
+            descriptionResId = R.string.auto_enable_hotspot_selfadb_description,
+            isChecked = pendingAutoEnableHotspotSelfAdB ?: false,
+            onCheckedChanged = { isChecked ->
+                pendingAutoEnableHotspotSelfAdB = isChecked
+                checkChanges()
+                updateSettingsList()
             }
         ))
     }

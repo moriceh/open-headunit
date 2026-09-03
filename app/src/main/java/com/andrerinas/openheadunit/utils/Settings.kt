@@ -1837,6 +1837,15 @@ class Settings(private val context: Context) {
         get() = prefs.getBoolean("auto-enable-hotspot", false)
         set(value) { prefs.edit().putBoolean("auto-enable-hotspot", value).apply() }
 
+    // Separate from autoEnableHotspot: bring the head unit's access point up through the app's own
+    // root Self-ADB (`cmd wifi start-softap`) when the Blink/ZXW WPP handshake starts. Uses the
+    // already-configured name/passphrase, always on 2.4 GHz (this radio does not host 5 GHz).
+    // Only offered in Blink/ZXW mode, where the WPP handshake is the natural moment the phone
+    // will be told the credentials and therefore needs the network up already.
+    var autoEnableHotspotSelfAdB: Boolean
+        get() = prefs.getBoolean("auto-enable-hotspot-selfadb", false)
+        set(value) { prefs.edit().putBoolean("auto-enable-hotspot-selfadb", value).apply() }
+
     var waitForWifiBeforeWifiDirect: Boolean
         get() = prefs.getBoolean("wait-for-wifi-before-wifi-direct", false)
         set(value) { prefs.edit().putBoolean("wait-for-wifi-before-wifi-direct", value).apply() }
