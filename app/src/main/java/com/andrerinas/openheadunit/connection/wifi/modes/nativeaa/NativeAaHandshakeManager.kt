@@ -1416,8 +1416,11 @@ class NativeAaHandshakeManager(
                 val now = SystemClock.elapsedRealtime()
                 val waitedS = (CREDENTIALS_WAIT_MS - (credentialsDeadline - now)) / 1000
 
-                // If in SelfADB hotspot mode, ensure the hotspot is up if not resolved yet
-                if (settings.autoEnableHotspotSelfAdB && waitedS >= 2 && waitedS % 6L == 0L) {
+                // If in SelfADB hotspot mode, ensure the hotspot is up if not resolved yet.
+                // The external-BT gate matches the setting's Blink/ZXW-only availability: on a
+                // plain Native AA unit this loop never needs a Self-ADB start.
+                if (externalBtDiagnostic() != null &&
+                    settings.autoEnableHotspotSelfAdB && waitedS >= 2 && waitedS % 6L == 0L) {
                     AppLog.i("NativeAA: Hotspot credentials still pending after ${waitedS}s — re-verifying SelfADB start...")
                     scope.launch(Dispatchers.IO) { HotspotManager.startViaSelfAdB(context) }
                 }
