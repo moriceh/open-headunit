@@ -902,6 +902,14 @@ class AapProjectionActivity : SurfaceActivity(), IProjectionView.Callbacks, Vide
                         }
                         is CommManager.ConnectionState.TransportStarted -> {
                             watchdogHandler.removeCallbacks(exitRunnable)
+                            val left = HeadUnitScreenConfig.getLeftMargin()
+                            val top = HeadUnitScreenConfig.getTopMargin()
+                            val right = HeadUnitScreenConfig.getRightMargin()
+                            val bottom = HeadUnitScreenConfig.getBottomMargin()
+                            if (left > 0 || top > 0 || right > 0 || bottom > 0) {
+                                commManager.sendUpdateUiConfigRequest(left, top, right, bottom)
+                                AppLog.i("[UI_DEBUG_FIX] TransportStarted -> sent sendUpdateUiConfigRequest: L=$left T=$top R=$right B=$bottom")
+                            }
                         }
                         else -> {}
                     }
@@ -2088,6 +2096,13 @@ class AapProjectionActivity : SurfaceActivity(), IProjectionView.Callbacks, Vide
         projectionView.addCallback(this)
         // Baseline for the "no frame drawn while streaming" renderer check (issue #767).
         projectionStartMs = SystemClock.elapsedRealtime()
+
+        // Debug aid: when "show cluster on main display" is on, render the dedicated cluster stream
+        // in a small floating window on top of the projection. It owns its own decoder, so the main
+        // picture is unaffected - both are visible at once.
+        if (settings.showClusterOnMainDisplay) {
+            ClusterOverlay.attach(this, container)
+        }
     }
 
     private fun setupFpsCounter() {

@@ -12,7 +12,7 @@ import com.andrerinas.openheadunit.connection.wifi.WifiLauncherMode
 import com.andrerinas.openheadunit.connection.wifi.WifiLauncherStopSequence
 import com.andrerinas.openheadunit.utils.AppLog
 
-class WifiLauncherNative : WifiLauncher {
+open class WifiLauncherNative : WifiLauncher {
 
     val strategy: NativeStrategy
 
@@ -58,26 +58,22 @@ class WifiLauncherNative : WifiLauncher {
         // nobody to hand the credentials to, so hosting a P2P group or holding the hotspot
         // open would only churn the WiFi stack for nothing.
         val externalBt = NativeAaHandshakeManager.externalBtDiagnostic()
-        if (externalBt != null) AppLog.e(externalBt)
-        val blockedByExternalBt =
-            externalBt != null && !NativeAaHandshakeManager.externalBtOverridden(service)
+        if (externalBt != null) AppLog.i("WifiLauncherNative: External BT detected ($externalBt) - bridge will engage.")
 
-        if (!blockedByExternalBt) {
-            if (this.strategy == NativeStrategy.HOTSPOT) {
-                // Read this device's own access point instead of hosting a P2P group. The AP
-                // itself is the user's to switch on; the provider only resolves and watches it.
-                AppLog.i("AapService: Native AA on the head unit hotspot — resolving access point credentials.")
-                softApCredentialsProvider?.start()
-            } else if (wifiDirect != null) {
-                // Start WiFi Direct as a "quiet host" (P2P Group for phone to join)
-                // We let WifiDirectManager handle the WiFi state (enabling if needed)
-                setupWifiDirect(wifiDirect)
-                wifiDirect.startNativeAaQuietHost()
-            }
-
-            // Start the official Bluetooth handshake servers
-            handshakeManager?.start()
+        if (this.strategy == NativeStrategy.HOTSPOT) {
+            // Read this device's own access point instead of hosting a P2P group. The AP
+            // itself is the user's to switch on; the provider only resolves and watches it.
+            AppLog.i("AapService: Native AA on the head unit hotspot — resolving access point credentials.")
+            softApCredentialsProvider?.start()
+        } else if (wifiDirect != null) {
+            // Start WiFi Direct as a "quiet host" (P2P Group for phone to join)
+            // We let WifiDirectManager handle the WiFi state (enabling if needed)
+            setupWifiDirect(wifiDirect)
+            wifiDirect.startNativeAaQuietHost()
         }
+
+        // Start the official Bluetooth handshake servers
+        handshakeManager?.start()
     }
 
     override fun stop(seq: WifiLauncherStopSequence) {

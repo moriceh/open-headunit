@@ -98,9 +98,8 @@ class NativeAaHandshakeManager(
 
         fun checkCompatibility(context: Context): Boolean {
             externalBtDiagnostic()?.let {
-                AppLog.w(it)
-                if (!externalBtOverridden(context)) return false
-                AppLog.w("NativeAA: continuing anyway — a secondary Bluetooth service is configured manually.")
+                AppLog.i("NativeAA: External Choiceway/ZXW BT detected ($it) - enabling ZXW Handshake Bridge.")
+                return true
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
@@ -195,6 +194,9 @@ class NativeAaHandshakeManager(
     // minutes. Cancelling cannot break a blocking JNI read either, but it does end every real
     // suspension point in the handshake. Do both; whichever the stack honours wins.
     @Volatile private var activeHandshakeJob: Job? = null
+    // The live TCP socket to the blink daemon. Kept so restartZxwBridge() can close it
+    // from the outside, which causes the ZXW bridge loop to catch the exception and reconnect.
+    @Volatile private var activeBlinkSocket: java.net.Socket? = null
     // Name of the primary Bluetooth radio we listen and poke on, captured in start(). A field
     // rather than a local so the diagnostic below can name the radio the phone is ignoring.
     @Volatile private var localRadioName: String = "?"
@@ -275,11 +277,7 @@ class NativeAaHandshakeManager(
         // see this as genuinely stopped. Nothing here is retryable, but a listener that was never
         // opened must not be reported as up.
         externalBtDiagnostic()?.let {
-            if (!externalBtOverridden(context)) {
-                AppLog.e(it)
-                return
-            }
-            AppLog.w("$it\nNativeAA: starting anyway — a secondary Bluetooth service is configured manually.")
+            AppLog.i("NativeAA: Choiceway/ZXW Bluetooth detected ($it) - Starting ZXW Bridge on 127.0.0.1:3152 / /dev/BT_serial...")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -308,6 +306,135 @@ class NativeAaHandshakeManager(
         // but getName() returns the real radio name (confirmed on-device: e.g. "Navegadortz2").
         localRadioName = try { adapter.name ?: "?" } catch (e: Exception) { "?" }
         AppLog.i("NativeAA: Starting Bluetooth Handshake Servers (primary radio [$localRadioName])...")
+
+        // --- ZXW / Choiceway Feasycom Bluetooth Bridge ---
+        scope.launch(Dispatchers.IO + CoroutineName("NativeAa-ZXW-Bridge")) {
+            AppLog.i("NativeAA-ZXW: Connecting to Choiceway blink daemon (127.0.0.1:3152)...")
+            while (isRunning && isActive) {
+                if (commManager.connectionState.value !is CommManager.ConnectionState.Disconnected ||
+                    aaListenersClosedForSession) {
+                    delay(2000)
+                    continue
+                }
+                var dataSocket: java.net.Socket? = null
+                try {
+                    val socket = java.net.Socket("127.0.0.1", 3152)
+                    dataSocket = socket
+                    activeBlinkSocket = socket
+                    AppLog.i("NativeAA-ZXW: Connected to blink daemon on 127.0.0.1:3152!")
+                    
+                    val rawOut = socket.getOutputStream()
+                    val rawIn = java.io.DataInputStream(socket.getInputStream())
+
+                    // 1. Initialiser blink en mode Android Auto (Packet 412 du PCAP: msgType 0x0101, body 0881021002)
+                    val initHeader = byteArrayOf(
+                        0x00, 0x00, 0xFF.toByte(), 0xFF.toByte(),
+                        0x00, 0x00, 0x01, 0x01,
+                        0x00, 0x00, 0x01, 0x01,
+                        0x00, 0x00, 0x00, 0x05
+                    )
+                    val initBody = byteArrayOf(0x08, 0x81.toByte(), 0x02, 0x10, 0x02)
+                    rawOut.write(initHeader)
+                    rawOut.write(initBody)
+                    rawOut.flush()
+                    AppLog.i("NativeAA-ZXW: Sent Android Auto activation command to blink:3152")
+
+                    // 2. Flux sortant encapsulé avec l'en-tête 16 octets de blink (0x0105)
+                    val zxwOut = object : java.io.OutputStream() {
+                        override fun write(b: Int) {
+                            write(byteArrayOf(b.toByte()))
+                        }
+                        override fun write(b: ByteArray, off: Int, len: Int) {
+                            val data = b.copyOfRange(off, off + len)
+                            val header = java.nio.ByteBuffer.allocate(16)
+                                .putShort(0x0000.toShort())
+                                .putShort(0xFFFF.toShort())
+                                .putInt(0x00000101)
+                                .putInt(0x00000105)
+                                .putInt(data.size)
+                                .array()
+                            rawOut.write(header)
+                            rawOut.write(data)
+                            rawOut.flush()
+                        }
+                        override fun flush() = rawOut.flush()
+                        override fun close() = rawOut.close()
+                    }
+
+                    // 3. Flux entrant filtré pour extraire uniquement les paquets WPP (0x0105)
+                    val zxwIn = object : java.io.InputStream() {
+                        private var buffer = java.io.ByteArrayInputStream(ByteArray(0))
+
+                        override fun read(): Int {
+                            while (buffer.available() == 0) {
+                                if (!fillBuffer()) return -1
+                            }
+                            return buffer.read()
+                        }
+
+                        override fun read(b: ByteArray, off: Int, len: Int): Int {
+                            while (buffer.available() == 0) {
+                                if (!fillBuffer()) return -1
+                            }
+                            return buffer.read(b, off, len)
+                        }
+
+                        private fun fillBuffer(): Boolean {
+                            while (isRunning && isActive) {
+                                val header = ByteArray(16)
+                                rawIn.readFully(header)
+                                val bb = java.nio.ByteBuffer.wrap(header)
+                                val magic = bb.int
+                                val sub1 = bb.int
+                                val msgType = bb.int
+                                val payloadLen = bb.int
+                                val body = ByteArray(payloadLen)
+                                if (payloadLen > 0) {
+                                    rawIn.readFully(body)
+                                }
+                                if (msgType == 0x00000105) {
+                                    // Paquet WPP reçu depuis le téléphone via blink !
+                                    buffer = java.io.ByteArrayInputStream(body)
+                                    return true
+                                } else {
+                                    AppLog.d("NativeAA-ZXW: Ignored telemetry msgType 0x${msgType.toString(16)} (len $payloadLen)")
+                                }
+                            }
+                            return false
+                        }
+                        override fun close() = rawIn.close()
+                    }
+
+                    val pairedMac = settings.autoStartBluetoothDeviceMacs.firstOrNull() ?: "00:00:00:00:00:00"
+                    val pairedName = settings.autoStartBluetoothDeviceName ?: "Phone"
+
+                    // Handle full WPP session over the ZXW Blink bridge
+                    handleHandshakeSession(
+                        zxwIn,
+                        zxwOut,
+                        pairedName,
+                        pairedMac,
+                        "Choiceway-Blink",
+                        closeSocket = { 
+                            try { socket.close() } catch (_: Exception) {}
+                        }
+                    )
+
+                    // Dès que la session Wi-Fi ou projection est active, on ne réinitialise PAS blink !
+                    while (isRunning && isActive && (
+                        commManager.isConnected ||
+                        commManager.connectionState.value is CommManager.ConnectionState.Connecting ||
+                        aaListenersClosedForSession)) {
+                        delay(2000)
+                    }
+                } catch (e: Exception) {
+                    AppLog.d("NativeAA-ZXW: Blink bridge retry: ${e.message}")
+                    try { dataSocket?.close() } catch (_: Exception) {}
+                    activeBlinkSocket = null
+                    delay(3000)
+                }
+            }
+        }
 
         // Start AA RFCOMM Server
         scope.launch(Dispatchers.IO + CoroutineName("NativeAa-RfcommServer")) {
@@ -858,6 +985,51 @@ class NativeAaHandshakeManager(
     }
 
     /**
+     * Brings the app to the foreground and asks MainActivity to show the "Android Auto is
+     * starting…" overlay, so the user sees that a wireless connection is actually in progress.
+     *
+     * Called from the ZXW/Blink bridge the moment the phone sends its first WPP message. It only
+     * fires in Blink mode — the other Native AA routes already have their own UI triggers. The
+     * call is idempotent: MainActivity ignores it if a connection is already active or an
+     * auto-connect is already showing.
+     */
+    private fun notifyBlinkHandshakeStarted() {
+        // This runs from the shared session loop, so ordinary Bluetooth units reach it too —
+        // but they already have their own UI trigger. Only the ZXW/Choiceway external-Bluetooth
+        // route (detected by externalBtDiagnostic) runs the handshake through the Blink bridge
+        // with no other visible feedback, so it is the only one that asks for the overlay.
+        if (externalBtDiagnostic() == null) return
+        AppLog.i("NativeAA-ZXW: WPP handshake started — bringing app to front to show progress.")
+        com.andrerinas.openheadunit.main.MainActivity.pendingBlinkHandshakeUi = true
+        try {
+            val launchIntent = android.content.Intent(context, com.andrerinas.openheadunit.main.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            context.startActivity(launchIntent)
+        } catch (e: Exception) {
+            AppLog.w("NativeAA-ZXW: Failed to bring MainActivity to front: ${e.message}")
+        }
+    }
+
+    /**
+     * Forces the ZXW/Blink bridge to restart by closing the active socket.
+     * The bridge loop catches the exception and reconnects after 3 s, re-sending the 0x0101
+     * activation command which wakes the phone via the Feasycom/ZXW Bluetooth chip.
+     */
+    fun restartZxwBridge() {
+        val socket = activeBlinkSocket
+        if (socket == null) {
+            AppLog.i("NativeAA-ZXW: restartZxwBridge() called but no active blink socket — bridge will connect on next cycle.")
+            return
+        }
+        AppLog.i("NativeAA-ZXW: Restarting blink bridge on user request — closing socket to 127.0.0.1:3152.")
+        resetHandshakeBackoff()
+        try { socket.close() } catch (e: Exception) {
+            AppLog.d("NativeAA-ZXW: Error closing blink socket during restart: ${e.message}")
+        }
+    }
+
+    /**
      * Runs [block] only while [socket] is still the handshake this manager is serving.
      *
      * Every write a handshake makes to shared manager state goes through this. Losing ownership
@@ -865,91 +1037,77 @@ class NativeAaHandshakeManager(
      * on for minutes — and its late writes would clear the live session's settling stamp, cancel
      * its poke, close listeners it still needs, or wipe a backoff it had legitimately earned.
      */
-    private inline fun ifOwner(socket: BluetoothSocket, block: () -> Unit) {
-        if (activeHandshakeSocket === socket) block()
+    private inline fun ifOwner(socket: BluetoothSocket?, block: () -> Unit) {
+        if (socket == null || activeHandshakeSocket === socket) block()
     }
 
     private suspend fun handleHandshake(socket: BluetoothSocket, localRadio: String? = null) = withContext(Dispatchers.IO) {
-        // The phone reached us. Recorded here rather than at either accept site so both the
-        // primary and the secondary-radio loops are covered by one statement.
+        val device = try { socket.remoteDevice } catch (e: Exception) { null }
+        val name = device?.name ?: "Bluetooth Device"
+        val addr = device?.address ?: "00:00:00:00:00:00"
+        handleHandshakeSession(
+            socket.inputStream,
+            socket.outputStream,
+            name,
+            addr,
+            localRadio,
+            closeSocket = { try { socket.close() } catch (_: Exception) {} },
+            rawBtSocket = socket
+        )
+    }
+
+    private suspend fun handleHandshakeSession(
+        inputStream: java.io.InputStream,
+        outputStream: java.io.OutputStream,
+        deviceName: String,
+        deviceAddress: String,
+        localRadio: String? = null,
+        closeSocket: () -> Unit,
+        rawBtSocket: BluetoothSocket? = null
+    ) = withContext(Dispatchers.IO) {
         everAcceptedAaConnection = true
         pokesSinceLastAccept = 0
 
-        // The wake poke is deliberately left running here. It used to be cancelled on entry, on
-        // the reasoning that a real AA_UUID connection means the poke has done its job and is now
-        // just competing for radio time — but cancelling it closes the HFP/HSP socket, and a
-        // phone-side Gearhead log shows the phone reacting within milliseconds:
-        //   GH.BtConnectionTracker: profile connection removed
-        //   GH.CurrentCarTracker:   current car bluetooth connection is lost / is gone
-        //   ...WIRELESS_SETUP_CAR_BLUETOOTH_DISAPPEAR
-        // and then, when its own first-message timer expires 12 s later, refusing to retry:
-        //   GH.WIRELESS.SETUP: WiFi Projection Protocol cannot start as HU is not present.
-        // Real head units hold the profile link across the exchange, so hold it too, until the
-        // credentials are actually delivered (see the Type 3 branch) or this handshake ends.
-
-        // The listener stays open across the settling window, so the phone can reconnect over
-        // Bluetooth while an earlier handoff is still settling. That reconnect means the earlier
-        // one failed: retire it rather than serving both from the same manager state.
         val previousSocket = activeHandshakeSocket
         val previousJob = activeHandshakeJob
-        // Ownership is claimed *before* the previous session is torn down, not after: cancelling
-        // it makes its finally block run on another thread at a moment we do not control, and the
-        // only thing keeping that block off this handshake's state is the ifOwner fence. Take
-        // ownership first and the fence is already closed when the old one unwinds.
-        activeHandshakeSocket = socket
+        activeHandshakeSocket = rawBtSocket
         activeHandshakeJob = coroutineContext[Job]
-        // Stamped after claiming ownership above, so a superseded handshake's cleanup — which
-        // only fires when it still owns activeHandshakeSocket — can't wipe this one's stamp.
         handshakeStartedAt = SystemClock.elapsedRealtime()
-        if (previousSocket != null && previousSocket !== socket) {
+        if (previousSocket != null && rawBtSocket != null && previousSocket !== rawBtSocket) {
             AppLog.i("NativeAA: A new handshake arrived while one was still settling — closing the previous session.")
             handoffSettlingSince = 0L
-            // Cancel *and* close, in that order: see activeHandshakeJob. Cancelling first means
-            // the old coroutine cannot mistake the close for a phone-side drop and act on it.
             previousJob?.cancel()
             try { previousSocket.close() } catch (_: Exception) {}
         }
-        // Whether this handshake put anything on the wire at all, and whether the phone answered
-        // any of it. Together with abortedLocally they decide, once in the fenced finally below,
-        // whether this attempt counts against consecutiveHandshakeFailures.
         var spokeToPhone = false
-        // Whether this handshake has already retired the "nothing came back" record. The phone
-        // sends several messages and the retraction only has to happen once; repeating it would
-        // put a binder call on every inbound message, including through the settling window where
-        // the phone is associating and there is nothing to gain by being busy.
         var retiredSilentRecord = false
         var abortedLocally = false
-        // Captured once, so a settings change mid-exchange cannot split it across two rulesets.
         val transport = settings.nativeApStrategy
-        val session = WppHandshakeSession(settings.nativeWifiVersionExchange)
-        // Everything the phone sends, in order. Replaces the single bounded read this used to do:
-        // types 6 and 7 arrive *after* the credentials go out, so a one-shot read could never see
-        // them, and the phone is free to interject a ping at any point in between.
+        val session = WppHandshakeSession(true)
         val inbound = Channel<ProtobufMessage>(Channel.UNLIMITED)
         var readerJob: Job? = null
         try {
-            val device = socket.remoteDevice
-            AppLog.i("NativeAA: Handling handshake for ${device.name} (${device.address}) on local radio [${localRadio ?: "?"}]")
+            AppLog.i("NativeAA: Handling handshake for $deviceName ($deviceAddress) on local radio [${localRadio ?: "?"}]")
 
             if (commManager.isConnected ||
                 commManager.connectionState.value is CommManager.ConnectionState.Connecting) {
                 AppLog.i("NativeAA: USB/other session already active. Aborting BT handshake so phone does not start a parallel wireless attempt.")
                 abortedLocally = true
-                try { socket.close() } catch (_: Exception) {}
+                closeSocket()
                 return@withContext
             }
 
             val macs = settings.autoStartBluetoothDeviceMacs
-            if (!macs.contains(device.address)) {
-                AppLog.i("NativeAA: Saving ${device.address} (${device.name}) to the list of auto-start devices.")
-                val newMacs = macs + device.address
+            if (!macs.contains(deviceAddress)) {
+                AppLog.i("NativeAA: Saving $deviceAddress ($deviceName) to the list of auto-start devices.")
+                val newMacs = macs + deviceAddress
                 settings.autoStartBluetoothDeviceMacs = newMacs
-                settings.autoStartBluetoothDeviceName = device.name ?: "Unknown Device"
+                settings.autoStartBluetoothDeviceName = deviceName
                 Settings.syncAutoStartBtMacsToDeviceStorage(context, newMacs)
             }
 
-            val input = DataInputStream(socket.inputStream)
-            val output = socket.outputStream
+            val input = DataInputStream(inputStream)
+            val output = outputStream
 
             // [BUG_FIX] There is no BluetoothSocket.setSoTimeout(), and the old workaround —
             // close the socket to unblock readFully() — only works where close() interrupts a
@@ -958,7 +1116,7 @@ class NativeAaHandshakeManager(
             // *wait* instead: read on a coroutine of its own and take messages from a channel,
             // which resumes on schedule whether or not the read ever returns. The reader itself is
             // still unreclaimable on such a stack; consecutiveHandshakeFailures bounds that.
-            readerJob = scope.launch(Dispatchers.IO + CoroutineName("NativeAa-Reader-${device.address}")) {
+            readerJob = scope.launch(Dispatchers.IO + CoroutineName("NativeAa-Reader-$deviceAddress")) {
                 try {
                     while (isActive) inbound.send(readProtobuf(input))
                 } catch (e: Exception) {
@@ -1003,7 +1161,7 @@ class NativeAaHandshakeManager(
                         // can reach this having had nothing from us before it.
                         spokeToPhone = true
                         AppLog.i("NativeAA: Handshake completed successfully on Bluetooth side.")
-                        ifOwner(socket) {
+                        ifOwner(rawBtSocket) {
                             // The exchange is done; the phone's work is not — it still has to
                             // associate, run WPS and get a DHCP lease. See isHandoffSettling().
                             handshakeStartedAt = 0L
@@ -1026,11 +1184,11 @@ class NativeAaHandshakeManager(
                         // Re-stamp rather than only extending our own deadline: isHandoffSettling()
                         // is what keeps the poke off the radio during the join, and it measures
                         // from this stamp. The session caps the total.
-                        ifOwner(socket) { handoffSettlingSince = SystemClock.elapsedRealtime() }
+                        ifOwner(rawBtSocket) { handoffSettlingSince = SystemClock.elapsedRealtime() }
                     }
                     WppAction.CompleteSuccess -> {
                         AppLog.i("NativeAA: WiFi session landed. Handshake session ending, releasing Bluetooth connection.")
-                        ifOwner(socket) {
+                        ifOwner(rawBtSocket) {
                             handoffSettlingSince = 0L
                             // Stop accepting new AA_UUID connections too, not just this socket —
                             // otherwise the phone's immediate reconnect-retry gets accepted,
@@ -1054,7 +1212,7 @@ class NativeAaHandshakeManager(
                             )
                         }
                     }
-                    WppAction.ResumePoke -> ifOwner(socket) {
+                    WppAction.ResumePoke -> ifOwner(rawBtSocket) {
                         // Clear the settling stamp first: triggerPoke() refuses to start while a
                         // handoff is settling, which is the whole point of that guard.
                         handoffSettlingSince = 0L
@@ -1105,9 +1263,14 @@ class NativeAaHandshakeManager(
                     if (msg != null) {
                         AppLog.i("NativeAA: [RX] Received Type ${msg.type} (Payload size: ${msg.payload.size})")
                         logReceivedDetail(msg)
+                        // First real WPP byte from the phone over the Blink bridge: this is the
+                        // moment the wireless handshake genuinely starts. In Blink/ZXW mode there
+                        // is otherwise no UI feedback (the user is often on another app), so bring
+                        // the app to the front and show the "Android Auto is starting…" overlay.
+                        notifyBlinkHandshakeStarted()
                         // The phone answered, so the channel carries data in at least one
                         // direction. Whatever the type turns out to be, this was not a silent unit.
-                        ifOwner(socket) {
+                        ifOwner(rawBtSocket) {
                             resetHandshakeBackoff()
                             // The banner's claim is literally that nothing came back, so anything
                             // coming back retires it. Kept as loose as the claim on purpose: a
@@ -1298,35 +1461,21 @@ class NativeAaHandshakeManager(
         } finally {
             // Only clear the stamps if this handshake still owns them — a superseding handshake
             // has already taken over and set its own.
-            if (activeHandshakeSocket === socket) {
+            if (rawBtSocket != null && activeHandshakeSocket === rawBtSocket) {
                 activeHandshakeSocket = null
                 activeHandshakeJob = null
                 handshakeStartedAt = 0L
                 handoffSettlingSince = 0L
-                // [BUG_FIX] Every silent ending counts, not just the timeout that used to
-                // increment inline: a socket error, a swallowed write and a cancellation are one
-                // failure from the outside, and each strands an unreclaimable IO thread.
-                // Excludes our own pre-exchange aborts (no credentials, masked BSSID, USB already
-                // up) — those repeat for as long as location services are off, and backing off
-                // would bury the log line saying how to fix it.
                 if (spokeToPhone && !abortedLocally && session.messagesReceived == 0) {
                     consecutiveHandshakeFailures++
-                    // The same fact, written down where the user can be told about it. Our bytes
-                    // went out and the phone answered none of them, which is what a head unit
-                    // whose Bluetooth accepts writes and airs nothing looks like from in here.
-                    // Deliberately the same predicate as the backoff rather than a second one:
-                    // it already excludes the aborts that are ours rather than the radio's.
                     AppLog.w("NativeAA: the phone connected over Bluetooth and answered nothing we sent. If this repeats, this unit's Bluetooth cannot carry Android Auto and USB or the Wireless Helper mode are the way round it.")
                     ConnectionIssues.raise(context, ConnectionIssue.BLUETOOTH_SENT_NO_DATA)
                 }
             }
-            // Best effort only, exactly as before: on a stack where close() does not interrupt a
-            // pending read this cannot end the reader — a blocking JNI read has no suspension
-            // point to cancel at — so its thread is stranded from here on.
             readerJob?.cancel()
             inbound.close()
-            try { socket.close() } catch (e: Exception) {}
-            AppLog.i("NativeAA: BT Handshake socket closed.")
+            closeSocket()
+            AppLog.i("NativeAA: Handshake stream closed ($deviceName).")
         }
     }
 

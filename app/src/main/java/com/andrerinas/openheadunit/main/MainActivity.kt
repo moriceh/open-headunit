@@ -774,6 +774,16 @@ class MainActivity : BaseActivity() {
         val intentData = intent.data
         val intentAction = intent.action
 
+        // The Blink bridge relaunched this activity the moment the phone opened the WPP
+        // handshake. Show the "Android Auto is starting…" overlay now so the user sees that
+        // something is actually happening. beginAutoConnect() no-ops if a connection is
+        // already active or an attempt is already in progress.
+        if (pendingBlinkHandshakeUi) {
+            pendingBlinkHandshakeUi = false
+            AppLog.i("MainActivity: Blink handshake UI requested by service")
+            beginAutoConnect("Blink/ZXW handshake started", ConnectionUiMode.OVERLAY)
+        }
+
         if (intentAction == "com.andrerinas.openheadunit.ACTION_EXIT") {
             AppLog.i("MainActivity: Received exit action")
             val exitIntent = Intent(this, AapService::class.java).apply {
@@ -864,10 +874,18 @@ class MainActivity : BaseActivity() {
         ContextCompat.registerReceiver(this, orientationReceiver, android.content.IntentFilter(AapService.ACTION_ORIENTATION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         isOrientationReceiverRegistered = true
 
-        // If an Android Auto session is active, bring the projection activity to front
-        if (App.provide(this).commManager.isConnected && !App.isPiPActive && !AapProjectionActivity.isForeground) {
-            AppLog.i("MainActivity: Active session detected, bringing projection to front")
-            bringProjectionToFront()
+        val mmSettings = Settings(this)
+        if (App.provide(this).commManager.isConnected) {
+            // If an Android Auto session is active, bring the projection activity to front
+            if (!App.isPiPActive && !AapProjectionActivity.isForeground) {
+                AppLog.i("MainActivity: Active session detected, bringing projection to front")
+                bringProjectionToFront()
+            }
+        } else if (mmSettings.enableMs9120Usb) {
+            // No phone connected: bring the MS9120 dongle up so the cluster display shows the
+            // "Android Auto not connected" idle screen instead of staying blank. CommManager
+            // switches it to the live stream once a session connects.
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.attach(this, mmSettings)
         }
 
         // Coming back from a failed attempt lands here, so this is where the reason gets said.
@@ -1115,5 +1133,14 @@ class MainActivity : BaseActivity() {
         @Volatile var hasAdvancedToActiveState: Boolean = false
 
         const val ACTION_RECREATE_MAIN = "com.andrerinas.openheadunit.ACTION_RECREATE_MAIN"
+
+        /**
+         * Set by the ZXW/Blink handshake bridge the moment the phone sends its first WPP
+         * message (the real start of the wireless handshake). MainActivity reads and clears
+         * it in [handleLaunchIntent] and shows the "Android Auto is starting…" overlay so the
+         * user gets visual feedback that a connection is in progress — there is otherwise
+         * nothing on screen while the Blink daemon relays the handshake.
+         */
+        @Volatile var pendingBlinkHandshakeUi: Boolean = false
     }
 }

@@ -56,6 +56,8 @@ import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.NativeAaHandsh
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.NativeCredentialsPreflight
 import com.andrerinas.openheadunit.utils.BluetoothHelper
 import androidx.lifecycle.lifecycleScope
+import com.andrerinas.openheadunit.utils.ZlinkHelper
+import com.andrerinas.openheadunit.service.OpenHuNotificationService
 import com.andrerinas.openheadunit.connection.wifi.modes.helper.HelperStrategy
 import com.andrerinas.openheadunit.connection.wifi.modes.nativeaa.NativeStrategy
 import com.andrerinas.openheadunit.connection.wifi.WifiLauncherMode
@@ -126,7 +128,6 @@ class SettingsFragment : Fragment() {
     private var pendingUseGps: Boolean? = null
     private var pendingShowNavigationNotifications: Boolean? = null
     private var pendingSyncMediaSessionAaMetadata: Boolean? = null
-    private var pendingAutoResumePlaybackOnReconnect: Boolean? = null
     private var pendingResolution: Int? = null
     private var pendingDpi: Int? = null
     private var pendingPixelAspectRatioE4: Int? = null
@@ -178,6 +179,20 @@ class SettingsFragment : Fragment() {
 
     private var pendingKillOnDisconnect: Boolean? = null
     private var pendingRaiseProjectionDuringCall: Boolean? = null
+
+    // Cluster display / MS9120 USB output — staged like the rest so they apply on "Save".
+    private var pendingEnableClusterVideo: Boolean? = null
+    private var pendingClusterVideoResolution: String? = null
+    private var pendingClusterVideoDpi: Int? = null
+    private var pendingShowClusterOnMainDisplay: Boolean? = null
+    private var pendingEnableClusterVideoTcpDebug: Boolean? = null
+    private var pendingClusterVideoTcpPort: Int? = null
+    private var pendingEnableMs9120Usb: Boolean? = null
+    private var pendingMs9120Resolution: Settings.Ms9120Resolution? = null
+    private var pendingMs9120ColorFormat: Settings.Ms9120ColorFormat? = null
+    private var pendingMs9120FrameSkip: Boolean? = null
+    private var pendingMs9120Stretch: Boolean? = null
+    private var pendingMs9120ShowMediaToast: Boolean? = null
 
     // Custom Insets
     private var pendingInsetLeft: Int? = null
@@ -273,7 +288,6 @@ class SettingsFragment : Fragment() {
         pendingUseGps = settings.useGpsForNavigation
         pendingShowNavigationNotifications = settings.showNavigationNotifications
         pendingSyncMediaSessionAaMetadata = settings.syncMediaSessionWithAaMetadata
-        pendingAutoResumePlaybackOnReconnect = settings.autoResumePlaybackOnReconnect
         pendingResolution = settings.resolutionId
         pendingDpi = settings.dpiPixelDensity
         pendingPixelAspectRatioE4 = settings.pixelAspectRatioE4
@@ -311,6 +325,20 @@ class SettingsFragment : Fragment() {
         pendingAutoEnableHotspot = settings.autoEnableHotspot
         pendingFakeSpeed = settings.fakeSpeed
         pendingUseLibusb = settings.useLibusb
+
+        // Cluster display / MS9120 USB output
+        pendingEnableClusterVideo = settings.enableClusterVideo
+        pendingClusterVideoResolution = settings.clusterVideoResolution
+        pendingClusterVideoDpi = settings.clusterVideoDpi
+        pendingShowClusterOnMainDisplay = settings.showClusterOnMainDisplay
+        pendingEnableClusterVideoTcpDebug = settings.enableClusterVideoTcpDebug
+        pendingClusterVideoTcpPort = settings.clusterVideoTcpPort
+        pendingEnableMs9120Usb = settings.enableMs9120Usb
+        pendingMs9120Resolution = settings.ms9120Resolution
+        pendingMs9120ColorFormat = settings.ms9120ColorFormat
+        pendingMs9120FrameSkip = settings.ms9120FrameSkip
+        pendingMs9120Stretch = settings.ms9120Stretch
+        pendingMs9120ShowMediaToast = settings.ms9120ShowMediaToast
 
         pendingWifiConnectionMode = settings.wifiConnectionMode
         pendingHelperConnectionStrategy = settings.helperConnectionStrategy
@@ -394,7 +422,6 @@ class SettingsFragment : Fragment() {
         pendingUseGps = settings.useGpsForNavigation
         pendingShowNavigationNotifications = settings.showNavigationNotifications
         pendingSyncMediaSessionAaMetadata = settings.syncMediaSessionWithAaMetadata
-        pendingAutoResumePlaybackOnReconnect = settings.autoResumePlaybackOnReconnect
         pendingResolution = settings.resolutionId
         pendingDpi = settings.dpiPixelDensity
         pendingPixelAspectRatioE4 = settings.pixelAspectRatioE4
@@ -427,6 +454,19 @@ class SettingsFragment : Fragment() {
         pendingAutoEnableHotspot = settings.autoEnableHotspot
         pendingFakeSpeed = settings.fakeSpeed
         pendingUseLibusb = settings.useLibusb
+        // Cluster display / MS9120 USB output
+        pendingEnableClusterVideo = settings.enableClusterVideo
+        pendingClusterVideoResolution = settings.clusterVideoResolution
+        pendingClusterVideoDpi = settings.clusterVideoDpi
+        pendingShowClusterOnMainDisplay = settings.showClusterOnMainDisplay
+        pendingEnableClusterVideoTcpDebug = settings.enableClusterVideoTcpDebug
+        pendingClusterVideoTcpPort = settings.clusterVideoTcpPort
+        pendingEnableMs9120Usb = settings.enableMs9120Usb
+        pendingMs9120Resolution = settings.ms9120Resolution
+        pendingMs9120ColorFormat = settings.ms9120ColorFormat
+        pendingMs9120FrameSkip = settings.ms9120FrameSkip
+        pendingMs9120Stretch = settings.ms9120Stretch
+        pendingMs9120ShowMediaToast = settings.ms9120ShowMediaToast
         pendingWifiConnectionMode = settings.wifiConnectionMode
         pendingHelperConnectionStrategy = settings.helperConnectionStrategy
         pendingWaitForWifi = settings.waitForWifiBeforeWifiDirect
@@ -521,7 +561,6 @@ class SettingsFragment : Fragment() {
         pendingUseGps?.let { settings.useGpsForNavigation = it }
         pendingShowNavigationNotifications?.let { settings.showNavigationNotifications = it }
         pendingSyncMediaSessionAaMetadata?.let { settings.syncMediaSessionWithAaMetadata = it }
-        pendingAutoResumePlaybackOnReconnect?.let { settings.autoResumePlaybackOnReconnect = it }
         pendingResolution?.let { settings.resolutionId = it }
         pendingDpi?.let { settings.dpiPixelDensity = it }
         pendingPixelAspectRatioE4?.let { settings.pixelAspectRatioE4 = it }
@@ -598,8 +637,41 @@ class SettingsFragment : Fragment() {
         pendingHideBatteryLevel?.let { settings.hideBatteryLevel = it }
         pendingHideClock?.let { settings.hideClock = it }
 
+        // Cluster display / MS9120 USB output
+        pendingEnableClusterVideo?.let { settings.enableClusterVideo = it }
+        pendingClusterVideoResolution?.let { settings.clusterVideoResolution = it }
+        pendingClusterVideoDpi?.let { settings.clusterVideoDpi = it }
+        pendingShowClusterOnMainDisplay?.let { settings.showClusterOnMainDisplay = it }
+        pendingEnableClusterVideoTcpDebug?.let { settings.enableClusterVideoTcpDebug = it }
+        pendingClusterVideoTcpPort?.let { settings.clusterVideoTcpPort = it }
+        pendingEnableMs9120Usb?.let { settings.enableMs9120Usb = it }
+        pendingMs9120Resolution?.let { settings.ms9120Resolution = it }
+        pendingMs9120ColorFormat?.let { settings.ms9120ColorFormat = it }
+        pendingMs9120FrameSkip?.let { settings.ms9120FrameSkip = it }
+        pendingMs9120Stretch?.let { settings.ms9120Stretch = it }
+        pendingMs9120ShowMediaToast?.let { settings.ms9120ShowMediaToast = it }
+
         settings.commit()
         AppLog.init(settings, requireContext().applicationContext)
+
+        // MS9120 USB output side-effects, applied only once the settings are actually saved
+        // (previously these fired on every toggle because the block wrote to `settings` directly).
+        // The cluster stream sink is decided on the next AA connect, so these are best-effort
+        // live adjustments; if a session is running it will be stopped below when
+        // `requiresRestart` is set (cluster-enable / MS9120-enable / res / format changes).
+        if (settings.showClusterOnMainDisplay) {
+            // Debug overlay wins over the dongle: release a live dongle.
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.detach()
+        } else if (settings.enableMs9120Usb) {
+            if (pendingMs9120Resolution != null || pendingMs9120ColorFormat != null) {
+                // Resolution or colour-format change: re-open the dongle at the new settings
+                // immediately rather than waiting for the next AA reconnect.
+                com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onResolutionOrFormatChanged(requireContext())
+            }
+        } else {
+            // MS9120 turned off (or was off): release any dongle that is still up.
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.detach()
+        }
 
         // View mode is only the local rendering backend, so apply it to a running projection
         // live instead of requiring a restart, the same path Quick Settings and the stall
@@ -653,7 +725,6 @@ class SettingsFragment : Fragment() {
                         pendingUseGps != settings.useGpsForNavigation ||
                         pendingShowNavigationNotifications != settings.showNavigationNotifications ||
                         pendingSyncMediaSessionAaMetadata != settings.syncMediaSessionWithAaMetadata ||
-                        pendingAutoResumePlaybackOnReconnect != settings.autoResumePlaybackOnReconnect ||
                         pendingResolution != settings.resolutionId ||
                         pendingDpi != settings.dpiPixelDensity ||
                         pendingPixelAspectRatioE4 != settings.pixelAspectRatioE4 ||
@@ -710,7 +781,19 @@ class SettingsFragment : Fragment() {
                         pendingUseLibusb != settings.useLibusb ||
                         pendingHideBatteryLevel != settings.hideBatteryLevel ||
                         pendingHidePhoneSignal != settings.hidePhoneSignal ||
-                        pendingHideClock != settings.hideClock
+                        pendingHideClock != settings.hideClock ||
+                        pendingEnableClusterVideo != settings.enableClusterVideo ||
+                        pendingClusterVideoResolution != settings.clusterVideoResolution ||
+                        pendingClusterVideoDpi != settings.clusterVideoDpi ||
+                        pendingShowClusterOnMainDisplay != settings.showClusterOnMainDisplay ||
+                        pendingEnableClusterVideoTcpDebug != settings.enableClusterVideoTcpDebug ||
+                        pendingClusterVideoTcpPort != settings.clusterVideoTcpPort ||
+                        pendingEnableMs9120Usb != settings.enableMs9120Usb ||
+                        pendingMs9120Resolution != settings.ms9120Resolution ||
+                        pendingMs9120ColorFormat != settings.ms9120ColorFormat ||
+                        pendingMs9120FrameSkip != settings.ms9120FrameSkip ||
+                        pendingMs9120Stretch != settings.ms9120Stretch ||
+                        pendingMs9120ShowMediaToast != settings.ms9120ShowMediaToast
 
         hasChanges = anyChange
 
@@ -736,7 +819,12 @@ class SettingsFragment : Fragment() {
                           pendingInsetRight != settings.insetRight ||
                           pendingInsetBottom != settings.insetBottom ||
                           pendingWifiConnectionMode != settings.wifiConnectionMode ||
-                          pendingUseLibusb != settings.useLibusb
+                          pendingUseLibusb != settings.useLibusb ||
+                          pendingEnableClusterVideo != settings.enableClusterVideo ||
+                          pendingShowClusterOnMainDisplay != settings.showClusterOnMainDisplay ||
+                          pendingEnableMs9120Usb != settings.enableMs9120Usb ||
+                          pendingMs9120Resolution != settings.ms9120Resolution ||
+                          pendingMs9120ColorFormat != settings.ms9120ColorFormat
 
         updateSaveButtonState()
     }
@@ -744,6 +832,20 @@ class SettingsFragment : Fragment() {
     /** Reads a fault budget for the settings row, so 0 says what it means rather than showing "0". */
     private fun describeFaultBudget(budget: Int): String =
         if (budget == VideoFaultInjector.UNLIMITED_BUDGET) "Whole session" else "$budget faults"
+
+    /** The device's own density (what "Automatic" resolves to), so the cluster-DPI row can prefill a sensible value. */
+    private fun detectedDeviceDensityDpi(): Int {
+        val m = android.util.DisplayMetrics()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                requireContext().display?.getRealMetrics(m)
+            } else {
+                @Suppress("DEPRECATION")
+                (requireContext().getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(m)
+            }
+        } catch (_: Exception) {}
+        return if (m.densityDpi > 0) m.densityDpi else 160
+    }
 
     private fun updateSettingsList() {
         val app = App.provide(requireContext())
@@ -887,7 +989,7 @@ class SettingsFragment : Fragment() {
             WifiLauncherMode.HELPER -> 0 // Helper
             WifiLauncherMode.NATIVE -> 1 // Native
             WifiLauncherMode.MANUAL, WifiLauncherMode.AUTO -> 2 // Server
-            else -> 1
+            else -> 2
         }
 
         items.add(SettingItem.SegmentedButtonSettingEntry(
@@ -900,7 +1002,7 @@ class SettingsFragment : Fragment() {
                     0 -> WifiLauncherMode.HELPER // Helper
                     1 -> WifiLauncherMode.NATIVE // Native
                     2 -> if (pendingWifiConnectionMode == WifiLauncherMode.MANUAL) WifiLauncherMode.MANUAL else WifiLauncherMode.AUTO // Keep manual/auto choice if already in server mode
-                    else -> WifiLauncherMode.NATIVE
+                    else -> WifiLauncherMode.AUTO
                 }
 
                 if (newMode == WifiLauncherMode.NATIVE) {
@@ -1172,15 +1274,14 @@ class SettingsFragment : Fragment() {
         // Sub-setting for Wireless Helper Strategy
         if (pendingWifiConnectionMode == WifiLauncherMode.HELPER) {
             val helperStrategies = resources.getStringArray(R.array.helper_strategies)
-            val currentStrategyId = pendingHelperConnectionStrategy?.id ?: settings.helperConnectionStrategy.id
             items.add(SettingItem.SettingEntry(
                 stableId = "helperStrategy",
                 nameResId = R.string.helper_strategy_label,
-                value = helperStrategies.getOrElse(currentStrategyId) { "" },
+                value = helperStrategies.getOrElse(pendingHelperConnectionStrategy!!.id) { "" },
                 onClick = {
                     MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
                         .setTitle(R.string.helper_strategy_label)
-                        .setSingleChoiceItems(helperStrategies, currentStrategyId) { dialog, which ->
+                        .setSingleChoiceItems(helperStrategies, pendingHelperConnectionStrategy!!.id) { dialog, which ->
                             pendingHelperConnectionStrategy = HelperStrategy.byIdOrDefault(which)
                             checkChanges()
                             dialog.dismiss()
@@ -1275,6 +1376,50 @@ class SettingsFragment : Fragment() {
             ))
         }
 
+        items.add(SettingItem.SettingEntry(
+            stableId = "zlinkManagement",
+            nameResId = R.string.zlink_management,
+            value = getString(R.string.zlink_management_desc),
+            searchKeywords = "zlink zlink5 z-link choiceway zxw daemon kill disable restore",
+            onClick = { showZlinkManagementDialog() }
+        ))
+
+        items.add(SettingItem.ToggleSettingEntry(
+            stableId = "autoKillZlink",
+            nameResId = R.string.zlink_auto_kill_title,
+            descriptionResId = R.string.zlink_auto_kill_desc,
+            isChecked = settings.autoKillZlink,
+            onCheckedChanged = { checked ->
+                settings.autoKillZlink = checked
+                updateSettingsList()
+            }
+        ))
+
+        items.add(SettingItem.ToggleSettingEntry(
+            stableId = "disableBtDuringProjection",
+            nameResId = R.string.disable_bt_during_projection_title,
+            descriptionResId = R.string.disable_bt_during_projection_desc,
+            isChecked = settings.disableBtDuringProjection,
+            onCheckedChanged = { checked ->
+                settings.disableBtDuringProjection = checked
+                if (!checked) {
+                    BluetoothHelper.setBluetoothEnabled(requireContext(), true)
+                }
+                updateSettingsList()
+            }
+        ))
+
+        val isServiceModeEnabled = OpenHuNotificationService.isEnabled(requireContext())
+        items.add(SettingItem.SettingEntry(
+            stableId = "openHuServiceMode",
+            nameResId = R.string.openhu_service_mode_title,
+            value = getString(if (isServiceModeEnabled) R.string.openhu_service_mode_active else R.string.openhu_service_mode_inactive),
+            searchKeywords = "service boot notification listener background autostart zlinktobap",
+            onClick = {
+                OpenHuNotificationService.openNotificationSettings(requireContext())
+                Toast.makeText(requireContext(), R.string.openhu_service_mode_toast, Toast.LENGTH_LONG).show()
+            }
+        ))
 
         // --- Automation ---
         items.add(SettingItem.CategoryHeader("automation", R.string.category_automation))
@@ -1313,7 +1458,7 @@ class SettingsFragment : Fragment() {
             stableId = "killOnDisconnect",
             nameResId = R.string.kill_on_disconnect,
             descriptionResId = R.string.kill_on_disconnect_description,
-            isChecked = pendingKillOnDisconnect ?: settings.killOnDisconnect,
+            isChecked = pendingKillOnDisconnect!!,
             onCheckedChanged = { isChecked ->
                 if (isChecked) {
                     val conflicts = getKillOnDisconnectConflicts()
@@ -1343,7 +1488,7 @@ class SettingsFragment : Fragment() {
                 stableId = "raiseProjectionDuringCall",
                 nameResId = R.string.raise_projection_during_call,
                 descriptionResId = R.string.raise_projection_during_call_description,
-                isChecked = pendingRaiseProjectionDuringCall ?: settings.raiseProjectionDuringCall,
+                isChecked = pendingRaiseProjectionDuringCall!!,
                 onCheckedChanged = { isChecked ->
                     pendingRaiseProjectionDuringCall = isChecked
                     checkChanges()
@@ -1362,7 +1507,7 @@ class SettingsFragment : Fragment() {
                 stableId = "gpsNavigation",
                 nameResId = R.string.gps_for_navigation,
                 descriptionResId = R.string.gps_for_navigation_description,
-                isChecked = pendingUseGps ?: settings.useGpsForNavigation,
+                isChecked = pendingUseGps!!,
                 onCheckedChanged = { isChecked ->
                     pendingUseGps = isChecked
                     checkChanges()
@@ -1375,7 +1520,7 @@ class SettingsFragment : Fragment() {
             stableId = "showNavigationNotifications",
             nameResId = R.string.show_navigation_notifications,
             descriptionResId = R.string.show_navigation_notifications_description,
-            isChecked = pendingShowNavigationNotifications ?: settings.showNavigationNotifications,
+            isChecked = pendingShowNavigationNotifications!!,
             onCheckedChanged = { isChecked ->
                 pendingShowNavigationNotifications = isChecked
                 checkChanges()
@@ -1387,7 +1532,7 @@ class SettingsFragment : Fragment() {
             stableId = "fakeSpeed",
             nameResId = R.string.fake_speed_title,
             descriptionResId = R.string.fake_speed_description,
-            isChecked = pendingFakeSpeed ?: settings.fakeSpeed,
+            isChecked = pendingFakeSpeed!!,
             onCheckedChanged = { isChecked ->
                 pendingFakeSpeed = isChecked
                 checkChanges()
@@ -1401,7 +1546,7 @@ class SettingsFragment : Fragment() {
         items.add(SettingItem.SettingEntry(
             stableId = "resolution",
             nameResId = R.string.resolution,
-            value = Settings.Resolution.fromId(pendingResolution ?: settings.resolutionId)?.resName ?: "",
+            value = Settings.Resolution.fromId(pendingResolution!!)?.resName ?: "",
             searchKeywords = Settings.Resolution.allRes.joinToString(" "),
             onClick = { showResolutionDialog() }
         ))
@@ -1429,7 +1574,7 @@ class SettingsFragment : Fragment() {
                 showNumericInputDialog(
                     title = getString(R.string.enter_pixel_aspect_ratio_value),
                     message = null,
-                    initialValue = if ((pendingPixelAspectRatioE4 ?: 10000) <= 0) 10000 else (pendingPixelAspectRatioE4 ?: 10000),
+                    initialValue = if ((pendingPixelAspectRatioE4 ?: 10000) <= 0) 10000 else pendingPixelAspectRatioE4!!,
                     onConfirm = { newVal ->
                         pendingPixelAspectRatioE4 = if (newVal <= 0) 10000 else newVal
                         checkChanges()
@@ -1499,11 +1644,11 @@ class SettingsFragment : Fragment() {
             },
             onClick = { _ ->
                 val viewModes = arrayOf(getString(R.string.surface_view), getString(R.string.texture_view), getString(R.string.gles_view))
-                val currentIdx = pendingViewMode?.value ?: settings.viewMode.value
+                val currentIdx = pendingViewMode!!.value
                 MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
                     .setTitle(R.string.change_view_mode)
                     .setSingleChoiceItems(viewModes, currentIdx) { dialog, which ->
-                        Settings.ViewMode.fromInt(which)?.let { pendingViewMode = it }
+                        pendingViewMode = Settings.ViewMode.fromInt(which)!!
                         checkChanges()
                         dialog.dismiss()
                         updateSettingsList()
@@ -1512,15 +1657,14 @@ class SettingsFragment : Fragment() {
             }
         ))
 
-        val orientationOptions = resources.getStringArray(R.array.screen_orientation)
-        val currentOrientationIdx = pendingScreenOrientation?.value ?: settings.screenOrientation.value
         items.add(SettingItem.SettingEntry(
             stableId = "screenOrientation",
             nameResId = R.string.screen_orientation,
-            value = orientationOptions.getOrElse(currentOrientationIdx) { "" },
-            searchKeywords = orientationOptions.joinToString(" "),
+            value = resources.getStringArray(R.array.screen_orientation)[pendingScreenOrientation!!.value],
+            searchKeywords = resources.getStringArray(R.array.screen_orientation).joinToString(" "),
             onClick = { _ ->
-                val currentIdx = pendingScreenOrientation?.value ?: settings.screenOrientation.value
+                val orientationOptions = resources.getStringArray(R.array.screen_orientation)
+                val currentIdx = pendingScreenOrientation!!.value
                 MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
                     .setTitle(R.string.change_screen_orientation)
                     .setSingleChoiceItems(orientationOptions, currentIdx) { dialog, whiches ->
@@ -1549,7 +1693,7 @@ class SettingsFragment : Fragment() {
             stableId = "stretchToFill",
             nameResId = R.string.pref_stretch_screen_title,
             descriptionResId = R.string.pref_stretch_screen_summary,
-            isChecked = pendingStretchToFill ?: settings.stretchToFill,
+            isChecked = pendingStretchToFill!!,
             onCheckedChanged = { isChecked ->
                 pendingStretchToFill = isChecked
                 requiresRestart = true // Requires a reconnect to apply the new rendering bounds
@@ -1587,7 +1731,7 @@ class SettingsFragment : Fragment() {
                 stableId = "forcedScale",
                 nameResId = R.string.forced_scale,
                 descriptionResId = R.string.forced_scale_description,
-                isChecked = pendingForcedScale ?: settings.forcedScale,
+                isChecked = pendingForcedScale!!,
                 onCheckedChanged = { isChecked ->
                     pendingForcedScale = isChecked
                     requiresRestart = true
@@ -1595,6 +1739,222 @@ class SettingsFragment : Fragment() {
                     updateSettingsList()
                 }
             ))
+        }
+
+        // --- Cluster display Settings (its own category, so it is no longer wedged into Graphic) ---
+        items.add(SettingItem.CategoryHeader("clusterDisplay", R.string.cluster_display_category))
+
+        items.add(SettingItem.ToggleSettingEntry(
+            stableId = "enableClusterVideo",
+            nameResId = R.string.enable_cluster_video_title,
+            descriptionResId = R.string.enable_cluster_video_desc,
+            isChecked = pendingEnableClusterVideo!!,
+            onCheckedChanged = { isChecked ->
+                pendingEnableClusterVideo = isChecked
+                checkChanges()
+                updateSettingsList()
+            }
+        ))
+
+        if (pendingEnableClusterVideo!!) {
+            val clusterResolutions = arrayOf("800x480", "1280x720", "1920x1080", "720x1280")
+            items.add(SettingItem.SettingEntry(
+                stableId = "clusterVideoResolution",
+                nameResId = R.string.cluster_video_resolution_title,
+                value = pendingClusterVideoResolution!!,
+                onClick = {
+                    val currentIdx = clusterResolutions.indexOf(pendingClusterVideoResolution!!).coerceAtLeast(0)
+                    MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+                        .setTitle(R.string.cluster_video_resolution_title)
+                        .setSingleChoiceItems(clusterResolutions, currentIdx) { dialog, which ->
+                            pendingClusterVideoResolution = clusterResolutions[which]
+                            checkChanges()
+                            dialog.dismiss()
+                            updateSettingsList()
+                        }
+                        .show()
+                }
+            ))
+
+            // Cluster DPI: the density the phone lays the cluster UI out at. 0 = automatic
+            // (device density); otherwise an explicit value. Takes effect on the next AA connect.
+            items.add(SettingItem.SettingEntry(
+                stableId = "clusterVideoDpi",
+                nameResId = R.string.cluster_video_dpi_title,
+                value = if (pendingClusterVideoDpi!! == 0) getString(R.string.dpi_automatic_desc)
+                       else pendingClusterVideoDpi!!.toString(),
+                onClick = {
+                    showNumericInputDialog(
+                        title = getString(R.string.cluster_video_dpi_title),
+                        message = getString(R.string.cluster_video_dpi_desc),
+                        initialValue = if (pendingClusterVideoDpi!! == 0) detectedDeviceDensityDpi() else pendingClusterVideoDpi!!,
+                        onConfirm = { newDpi ->
+                            if (newDpi in 0..960) {
+                                pendingClusterVideoDpi = newDpi
+                                checkChanges()
+                                updateSettingsList()
+                            } else {
+                                Toast.makeText(requireContext(), R.string.cluster_video_dpi_range, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+            ))
+
+            // Debug: render the cluster stream to the main display. Wins over both the MS9120 and
+            // TCP sinks, so their rows are hidden when this is on (decided at connect time).
+            items.add(SettingItem.ToggleSettingEntry(
+                stableId = "showClusterOnMainDisplay",
+                nameResId = R.string.show_cluster_on_main_title,
+                descriptionResId = R.string.show_cluster_on_main_desc,
+                isChecked = pendingShowClusterOnMainDisplay!!,
+                onCheckedChanged = { isChecked ->
+                    pendingShowClusterOnMainDisplay = isChecked
+                    // The overlay wins over the other two sinks: switch their pending state off too,
+                    // so the UI and the saved values stay consistent (applied on Save).
+                    if (isChecked) {
+                        pendingEnableMs9120Usb = false
+                        pendingEnableClusterVideoTcpDebug = false
+                    }
+                    checkChanges()
+                    updateSettingsList()
+                }
+            ))
+
+            // Debug-only TCP sink. Mutually exclusive with the MS9120 output below (MS9120 wins),
+            // so it is shown only when the MS9120 output is off.
+            if (pendingEnableMs9120Usb != true && pendingShowClusterOnMainDisplay != true) {
+                items.add(SettingItem.ToggleSettingEntry(
+                    stableId = "enableClusterVideoTcpDebug",
+                    nameResId = R.string.enable_cluster_video_tcp_debug_title,
+                    descriptionResId = R.string.enable_cluster_video_tcp_debug_desc,
+                    isChecked = pendingEnableClusterVideoTcpDebug!!,
+                    onCheckedChanged = { isChecked ->
+                        pendingEnableClusterVideoTcpDebug = isChecked
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                ))
+                items.add(SettingItem.SettingEntry(
+                    stableId = "clusterVideoTcpPort",
+                    nameResId = R.string.cluster_video_port_title,
+                    value = pendingClusterVideoTcpPort!!.toString(),
+                    onClick = {
+                        showNumericInputDialog(
+                            title = getString(R.string.cluster_video_port_title),
+                            message = getString(R.string.cluster_video_port_desc),
+                            initialValue = pendingClusterVideoTcpPort!!,
+                            onConfirm = { newPort ->
+                                if (newPort in 1024..65535) {
+                                    pendingClusterVideoTcpPort = newPort
+                                    checkChanges()
+                                    updateSettingsList()
+                                } else {
+                                    Toast.makeText(requireContext(), "Port 1024-65535", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+                    }
+                ))
+            }
+
+            // ---- MS9120 USB video output (its own sub-category inside the cluster block) ----
+            items.add(SettingItem.CategoryHeader("ms9120", R.string.ms9120_category))
+
+            items.add(SettingItem.ToggleSettingEntry(
+                stableId = "enableMs9120Usb",
+                nameResId = R.string.enable_ms9120_usb_title,
+                descriptionResId = R.string.enable_ms9120_usb_desc,
+                isChecked = pendingEnableMs9120Usb!!,
+                onCheckedChanged = { isChecked ->
+                    pendingEnableMs9120Usb = isChecked
+                    checkChanges()
+                    updateSettingsList()
+                }
+            ))
+
+            if (pendingEnableMs9120Usb!!) {
+                // Labels and values are BOTH derived from the enum, so the two can never fall out of
+                // sync the way they did when the labels came from a separate res array in a
+                // different order ("résolution mélangé"): picking "1080p" used to store the 480p
+                // enum entry because the arrays disagreed on position.
+                val resValues = Settings.Ms9120Resolution.entries
+                val resLabels = resValues.map { it.label }.toTypedArray()
+                items.add(SettingItem.SettingEntry(
+                    stableId = "ms9120Resolution",
+                    nameResId = R.string.ms9120_resolution_title,
+                    value = pendingMs9120Resolution!!.label,
+                    onClick = {
+                        MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+                            .setTitle(R.string.ms9120_resolution_title)
+                            .setSingleChoiceItems(resLabels, resValues.indexOf(pendingMs9120Resolution!!)) { dialog, which ->
+                                pendingMs9120Resolution = resValues[which]
+                                checkChanges()
+                                dialog.dismiss()
+                                updateSettingsList()
+                            }
+                            .show()
+                    }
+                ))
+
+                val colorLabels = resources.getStringArray(R.array.ms9120_color_formats)
+                val colorValues = arrayOf(
+                    Settings.Ms9120ColorFormat.YUV422,
+                    Settings.Ms9120ColorFormat.RGB888,
+                    Settings.Ms9120ColorFormat.RGB565
+                )
+                items.add(SettingItem.SettingEntry(
+                    stableId = "ms9120ColorFormat",
+                    nameResId = R.string.ms9120_color_format_title,
+                    value = colorLabels[colorValues.indexOf(pendingMs9120ColorFormat!!)],
+                    onClick = {
+                        MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+                            .setTitle(R.string.ms9120_color_format_title)
+                            .setSingleChoiceItems(colorLabels, colorValues.indexOf(pendingMs9120ColorFormat!!)) { dialog, which ->
+                                pendingMs9120ColorFormat = colorValues[which]
+                                checkChanges()
+                                dialog.dismiss()
+                                updateSettingsList()
+                            }
+                            .show()
+                    }
+                ))
+
+                items.add(SettingItem.ToggleSettingEntry(
+                    stableId = "ms9120FrameSkip",
+                    nameResId = R.string.ms9120_frame_skip_title,
+                    descriptionResId = R.string.ms9120_frame_skip_desc,
+                    isChecked = pendingMs9120FrameSkip!!,
+                    onCheckedChanged = { isChecked ->
+                        pendingMs9120FrameSkip = isChecked
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                ))
+
+                items.add(SettingItem.ToggleSettingEntry(
+                    stableId = "ms9120Stretch",
+                    nameResId = R.string.ms9120_stretch_title,
+                    descriptionResId = R.string.ms9120_stretch_desc,
+                    isChecked = pendingMs9120Stretch!!,
+                    onCheckedChanged = { isChecked ->
+                        pendingMs9120Stretch = isChecked
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                ))
+                items.add(SettingItem.ToggleSettingEntry(
+                    stableId = "ms9120ShowMediaToast",
+                    nameResId = R.string.ms9120_show_media_toast_title,
+                    descriptionResId = R.string.ms9120_show_media_toast_desc,
+                    isChecked = pendingMs9120ShowMediaToast!!,
+                    onCheckedChanged = { isChecked ->
+                        pendingMs9120ShowMediaToast = isChecked
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                ))
+            }
         }
 
         // --- Theming Settings ---
@@ -1650,7 +2010,7 @@ class SettingsFragment : Fragment() {
             stableId = "forceSoftwareDecoding",
             nameResId = R.string.force_software_decoding,
             descriptionResId = R.string.force_software_decoding_description,
-            isChecked = pendingForceSoftware ?: settings.forceSoftwareDecoding,
+            isChecked = pendingForceSoftware!!,
             onCheckedChanged = { isChecked ->
                 pendingForceSoftware = isChecked
                 checkChanges()
@@ -1693,7 +2053,7 @@ class SettingsFragment : Fragment() {
         items.add(SettingItem.SettingEntry(
             stableId = "videoCodec",
             nameResId = R.string.video_codec,
-            value = pendingVideoCodec ?: settings.videoCodec,
+            value = pendingVideoCodec!!,
             searchKeywords = "Auto H.264 H.265",
             onClick = { _ ->
                 val codecs = arrayOf("Auto", "H.264", "H.265")
@@ -1822,7 +2182,7 @@ class SettingsFragment : Fragment() {
             stableId = "enableAudioSink",
             nameResId = R.string.enable_audio_sink,
             descriptionResId = R.string.enable_audio_sink_description,
-            isChecked = pendingEnableAudioSink ?: settings.enableAudioSink,
+            isChecked = pendingEnableAudioSink!!,
             onCheckedChanged = { isChecked ->
                 pendingEnableAudioSink = isChecked
                 checkChanges()
@@ -1906,7 +2266,7 @@ class SettingsFragment : Fragment() {
             stableId = "useAacAudio",
             nameResId = R.string.use_aac_audio,
             descriptionResId = R.string.use_aac_audio_description,
-            isChecked = pendingUseAacAudio ?: settings.useAacAudio,
+            isChecked = pendingUseAacAudio!!,
             onCheckedChanged = { isChecked ->
                 pendingUseAacAudio = isChecked
                 checkChanges()
@@ -1931,21 +2291,9 @@ class SettingsFragment : Fragment() {
             stableId = "syncMediaSessionAaMetadata",
             nameResId = R.string.sync_media_session_aa_metadata,
             descriptionResId = R.string.sync_media_session_aa_metadata_description,
-            isChecked = pendingSyncMediaSessionAaMetadata ?: settings.syncMediaSessionWithAaMetadata,
+            isChecked = pendingSyncMediaSessionAaMetadata!!,
             onCheckedChanged = { isChecked ->
                 pendingSyncMediaSessionAaMetadata = isChecked
-                checkChanges()
-                updateSettingsList()
-            }
-        ))
-
-        items.add(SettingItem.ToggleSettingEntry(
-            stableId = "autoResumePlaybackOnReconnect",
-            nameResId = R.string.auto_resume_playback_on_reconnect,
-            descriptionResId = R.string.auto_resume_playback_on_reconnect_description,
-            isChecked = pendingAutoResumePlaybackOnReconnect ?: settings.autoResumePlaybackOnReconnect,
-            onCheckedChanged = { isChecked ->
-                pendingAutoResumePlaybackOnReconnect = isChecked
                 checkChanges()
                 updateSettingsList()
             }
@@ -2097,7 +2445,7 @@ class SettingsFragment : Fragment() {
             stableId = "showFpsCounter",
             nameResId = R.string.show_fps_counter,
             descriptionResId = R.string.show_fps_counter_description,
-            isChecked = pendingShowFpsCounter ?: settings.showFpsCounter,
+            isChecked = pendingShowFpsCounter!!,
             onCheckedChanged = { isChecked ->
                 pendingShowFpsCounter = isChecked
                 checkChanges()
@@ -3832,46 +4180,7 @@ class SettingsFragment : Fragment() {
     }
 
     private fun handleNativeAaSelection() {
-        // An external Bluetooth module is not a "might not work" — the phone is bonded to a chip
-        // this app cannot write to, so say so plainly and name the evidence instead of offering
-        // the generic "try it anyway".
-        val externalBtEvidence = BluetoothHelper.externalBtEvidence
-        if (externalBtEvidence != null) {
-            MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
-                .setTitle(R.string.external_bt_nativeaa)
-                .setMessage(getString(R.string.external_bt_nativeaa_desc, externalBtEvidence))
-                // Selecting the mode is still allowed: on a unit with a second, reachable radio
-                // the user can name it under the secondary-Bluetooth setting, and Native mode
-                // will then run. Without that it stays switched off, and the log says why.
-                .setPositiveButton(android.R.string.ok) { dialog, _ ->
-                    acceptNativeAaMode()
-                    dialog.dismiss()
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-            return
-        }
-        if (NativeAaHandshakeManager.checkCompatibility(requireContext())) {
-            MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
-                .setTitle(R.string.supported_nativeaa)
-                .setMessage(R.string.supported_nativeaa_desc)
-                .setPositiveButton(android.R.string.ok) { dialog, _ ->
-                    acceptNativeAaMode()
-                    dialog.dismiss()
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-        } else {
-            MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
-                .setTitle(R.string.not_supported_nativeaa)
-                .setMessage(R.string.not_supported_nativeaa_desc)
-                .setPositiveButton(android.R.string.ok) { dialog, _ ->
-                    acceptNativeAaMode()
-                    dialog.dismiss()
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-        }
+        acceptNativeAaMode()
     }
 
     /**
@@ -4066,6 +4375,84 @@ class SettingsFragment : Fragment() {
                 startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
             } catch (e2: Exception) {
                 AppLog.w("SettingsFragment: could not open the location settings: ${e2.message}")
+            }
+        }
+    }
+
+    private fun showZlinkManagementDialog() {
+        val progressDialog = MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+            .setTitle(R.string.zlink_status_title)
+            .setMessage(getString(R.string.zlink_action_running))
+            .setCancelable(false)
+            .create()
+
+        progressDialog.show()
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ctx = requireContext()
+            val status = withContext(Dispatchers.IO) { ZlinkHelper.getStatus(ctx) }
+            progressDialog.dismiss()
+
+            val scriptText = when {
+                status.isScriptActive -> getString(R.string.zlink_script_active)
+                status.isScriptBakPresent -> getString(R.string.zlink_script_bak)
+                else -> getString(R.string.zlink_script_none)
+            }
+            val processText = if (status.isProcessRunning) {
+                getString(R.string.zlink_process_running)
+            } else {
+                getString(R.string.zlink_process_stopped)
+            }
+            val pkgsText = if (status.disabledPackages.isNotEmpty()) {
+                getString(R.string.zlink_pkg_disabled, status.disabledPackages.joinToString())
+            } else if (status.enabledPackages.isNotEmpty()) {
+                getString(R.string.zlink_pkg_enabled, status.enabledPackages.joinToString())
+            } else {
+                getString(R.string.zlink_pkg_none)
+            }
+            val accessText = getString(R.string.zlink_access_mode, status.accessMode)
+
+            val message = "$scriptText\n\n$processText\n\n$pkgsText\n\n$accessText"
+
+            MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+                .setTitle(R.string.zlink_status_title)
+                .setMessage(message)
+                .setPositiveButton(R.string.zlink_btn_kill_now) { _, _ ->
+                    performZlinkAction(disable = true)
+                }
+                .setNeutralButton(R.string.zlink_btn_restore) { _, _ ->
+                    performZlinkAction(disable = false)
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun performZlinkAction(disable: Boolean) {
+        val progressDialog = MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+            .setTitle(if (disable) R.string.zlink_btn_disable else R.string.zlink_btn_restore)
+            .setMessage(getString(R.string.zlink_action_running))
+            .setCancelable(false)
+            .create()
+
+        progressDialog.show()
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ctx = requireContext()
+            val result = withContext(Dispatchers.IO) {
+                if (disable) ZlinkHelper.disableZlink(ctx) else ZlinkHelper.restoreZlink(ctx)
+            }
+            progressDialog.dismiss()
+
+            result.onSuccess { msg ->
+                Toast.makeText(requireContext(), msg, Toast.LENGTH_LONG).show()
+                updateSettingsList()
+            }.onFailure { err ->
+                MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+                    .setTitle("Erreur")
+                    .setMessage(err.localizedMessage ?: "Une erreur est survenue")
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
             }
         }
     }

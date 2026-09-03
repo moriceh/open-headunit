@@ -48,62 +48,64 @@ class ServiceDiscoveryResponse(private val context: Context)
 
             services.add(sensors)
 
+            val explicitSoftwareHevc =
+                settings.videoCodec == VideoDecoder.CodecType.H265.settingsValue &&
+                        settings.forceSoftwareDecoding &&
+                        when (settings.softwareVideoDecoder) {
+                            com.andrerinas.openheadunit.utils.Settings.SoftwareVideoDecoder.BUNDLED_FFMPEG ->
+                                com.andrerinas.openheadunit.decoder.video.VideoDecoder.isBundledHevcDecoderAvailable()
+                            com.andrerinas.openheadunit.utils.Settings.SoftwareVideoDecoder.DEVICE_MEDIACODEC ->
+                                com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcDecoderAvailable(includeSoftware = true)
+                        }
+            val hevcAvailableForUserChoice =
+                com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcSupported() || explicitSoftwareHevc
+            val hevcAvailableForHighResolution =
+                com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcReliable() || explicitSoftwareHevc
+
+            val codecToRequest = when (settings.videoCodec) {
+                "H.265" -> if (hevcAvailableForUserChoice) {
+                    Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
+                } else {
+                    Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
+                }
+                "Auto" -> {
+                    val negotiatedResolution = HeadUnitScreenConfig.negotiatedResolutionType
+                    if (negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160 &&
+                        com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcReliable()) {
+                        Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
+                    } else {
+                        Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
+                    }
+                }
+                else -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
+            }
+
+            // Use HeadUnitScreenConfig for negotiated resolution and margins
+            val negotiatedResolution = HeadUnitScreenConfig.negotiatedResolutionType
+            val phoneWidthMargin = HeadUnitScreenConfig.getWidthMargin()
+            val phoneHeightMargin = HeadUnitScreenConfig.getHeightMargin()
+
+            val effectiveCodec = if ((negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440 ||
+                negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1440x2560) &&
+                hevcAvailableForHighResolution) {
+                AppLog.i("Resolution is 1440p -> Enforcing H.265 codec")
+                Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
+            } else {
+                codecToRequest
+            }
+
             val video = Control.Service.newBuilder().also { service ->
                 service.id = Channel.ID_VID
                 service.mediaSinkService = Control.Service.MediaSinkService.newBuilder().also { mediaSinkServiceBuilder ->
-                    val explicitSoftwareHevc =
-                        settings.videoCodec == VideoDecoder.CodecType.H265.settingsValue &&
-                                settings.forceSoftwareDecoding &&
-                                when (settings.softwareVideoDecoder) {
-                                    com.andrerinas.openheadunit.utils.Settings.SoftwareVideoDecoder.BUNDLED_FFMPEG ->
-                                        com.andrerinas.openheadunit.decoder.video.VideoDecoder.isBundledHevcDecoderAvailable()
-                                    com.andrerinas.openheadunit.utils.Settings.SoftwareVideoDecoder.DEVICE_MEDIACODEC ->
-                                        com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcDecoderAvailable(includeSoftware = true)
-                                }
-                    val hevcAvailableForUserChoice =
-                        com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcSupported() || explicitSoftwareHevc
-                    val hevcAvailableForHighResolution =
-                        com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcReliable() || explicitSoftwareHevc
-
-                    val codecToRequest = when (settings.videoCodec) {
-                        "H.265" -> if (hevcAvailableForUserChoice) {
-                            Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
-                        } else {
-                            Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
-                        }
-                        "Auto" -> {
-                            // Only use H.265 in Auto mode for 4K or if explicitly needed,
-                            // otherwise prefer stable H.264
-                            val negotiatedResolution = HeadUnitScreenConfig.negotiatedResolutionType
-                            if (negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160 &&
-                                com.andrerinas.openheadunit.decoder.video.VideoDecoder.isHevcReliable()) {
-                                Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
-                            } else {
-                                Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
-                            }
-                        }
-                        else -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
-                    }
-
-                    // Use HeadUnitScreenConfig for negotiated resolution and margins
-                    val negotiatedResolution = HeadUnitScreenConfig.negotiatedResolutionType
-                    val phoneWidthMargin = HeadUnitScreenConfig.getWidthMargin()
-                    val phoneHeightMargin = HeadUnitScreenConfig.getHeightMargin()
-
-                    // Enforce H.265 for 1440p resolution as required by Android Auto.
-                    // Software HEVC is allowed only when the user explicitly selected it.
-                    val effectiveCodec = if ((negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440 ||
-                        negotiatedResolution == Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1440x2560) &&
-                        hevcAvailableForHighResolution) {
-                        AppLog.i("Resolution is 1440p -> Enforcing H.265 codec")
-                        Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
-                    } else {
-                        codecToRequest
-                    }
-
                     mediaSinkServiceBuilder.availableType = effectiveCodec
                     mediaSinkServiceBuilder.audioType = Media.AudioStreamType.NONE
                     mediaSinkServiceBuilder.availableWhileInCall = true
+
+                    // Protobuf on MediaSinkService: Tag 6 = display_id (0), Tag 7 = display_type (0 = MAIN)
+                    mediaSinkServiceBuilder.setUnknownFields(com.google.protobuf.UnknownFieldSet.newBuilder()
+                        .addField(6, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(0L).build())
+                        .addField(7, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(0L).build())
+                        .build())
 
                     AppLog.i("[ServiceDiscovery] NegotiatedResolution is: ${HeadUnitScreenConfig.getNegotiatedWidth()}x${HeadUnitScreenConfig.getNegotiatedHeight()}")
                     logNegotiatedCodecCapability(effectiveCodec, settings)
@@ -127,9 +129,74 @@ class ServiceDiscoveryResponse(private val context: Context)
 
             services.add(video)
 
+            if (settings.enableClusterVideo) {
+                val clusterResolution = when (settings.clusterVideoResolution) {
+                    "1280x720" -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1280x720
+                    "1920x1080" -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080
+                    else -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._800x480
+                }
+                // 0 = automatic -> the previous hardcoded 160. An explicit cluster DPI scales the
+                // phone's cluster UI layout for the panel this sink drives.
+                val clusterDpi = if (settings.clusterVideoDpi > 0) settings.clusterVideoDpi else 160
+                val clusterVideo = Control.Service.newBuilder().also { service ->
+                    service.id = Channel.ID_VID_CLUSTER
+                    service.mediaSinkService = Control.Service.MediaSinkService.newBuilder().also { sink ->
+                        sink.availableType = Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
+                        sink.audioType = Media.AudioStreamType.NONE
+                        sink.availableWhileInCall = true
+
+                        // Protobuf on MediaSinkService: Tag 6 = display_id (1), Tag 7 = display_type (1 = CLUSTER)
+                        sink.setUnknownFields(com.google.protobuf.UnknownFieldSet.newBuilder()
+                            .addField(6, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(1L).build())
+                            .addField(7, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(1L).build())
+                            .build())
+
+                        sink.addVideoConfigs(Control.Service.MediaSinkService.VideoConfiguration.newBuilder().apply {
+                            codecResolution = clusterResolution
+                            frameRate = Control.Service.MediaSinkService.VideoConfiguration.VideoFrameRateType._30
+                            setDensity(clusterDpi)
+                            setPixelAspectRatioE4(10000)
+                            setMarginWidth(0)
+                            setMarginHeight(0)
+                            setVideoCodecType(Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
+                        }.build())
+
+                        if (settings.videoCodec == VideoDecoder.CodecType.H265.settingsValue) {
+                            sink.addVideoConfigs(Control.Service.MediaSinkService.VideoConfiguration.newBuilder().apply {
+                                codecResolution = clusterResolution
+                                frameRate = Control.Service.MediaSinkService.VideoConfiguration.VideoFrameRateType._30
+                                setDensity(clusterDpi)
+                                setPixelAspectRatioE4(10000)
+                                setMarginWidth(0)
+                                setMarginHeight(0)
+                                setVideoCodecType(Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
+                            }.build())
+                        }
+                    }.build()
+                }.build()
+                services.add(clusterVideo)
+                AppLog.i("[ServiceDiscovery] Announcing Secondary Cluster MediaSinkService on channel ${Channel.ID_VID_CLUSTER} (DisplayType=CLUSTER, displayId=1, res=$clusterResolution)")
+
+                val clusterInput = Control.Service.newBuilder().also { service ->
+                    service.id = Channel.ID_INP_CLUSTER
+                    service.inputSourceService = Control.Service.InputSourceService.newBuilder().also {
+                        it.setUnknownFields(com.google.protobuf.UnknownFieldSet.newBuilder()
+                            .addField(5, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(1L).build())
+                            .build())
+                    }.build()
+                }.build()
+                services.add(clusterInput)
+                AppLog.i("[ServiceDiscovery] Announcing Secondary Cluster InputSourceService on channel ${Channel.ID_INP_CLUSTER} (displayId=1)")
+            }
+
             val input = Control.Service.newBuilder().also { service ->
                 service.id = Channel.ID_INP
                 service.inputSourceService = Control.Service.InputSourceService.newBuilder().also {
+                    // Protobuf on InputSourceService: Tag 5 = display_id (0)
+                    it.setUnknownFields(com.google.protobuf.UnknownFieldSet.newBuilder()
+                        .addField(5, com.google.protobuf.UnknownFieldSet.Field.newBuilder().addVarint(0L).build())
+                        .build())
+
                     it.touchscreen = Control.Service.InputSourceService.TouchConfig.newBuilder().apply {
                         setWidth(HeadUnitScreenConfig.getNegotiatedWidth()) // Use negotiated width
                         setHeight(HeadUnitScreenConfig.getNegotiatedHeight()) // Use negotiated height
@@ -230,12 +297,15 @@ class ServiceDiscoveryResponse(private val context: Context)
                         "session that connects once and then stops on an older phone may be this")
             }
 
-            // Bluetooth Service
-            if (settings.bluetoothAddress.isNotEmpty()) {
+            // Bluetooth Service (Obligatoire pour Wireless Android Auto)
+            val btAddress = settings.bluetoothAddress.ifEmpty {
+                com.andrerinas.openheadunit.utils.BluetoothHelper.getBluetoothMacAddress(context).orEmpty()
+            }
+            if (btAddress.isNotEmpty() && btAddress != "02:00:00:00:00:00") {
                 val bluetooth = Control.Service.newBuilder().also { service ->
                     service.id = Channel.ID_BTH
                     service.bluetoothService = Control.Service.BluetoothService.newBuilder().also {
-                        it.carAddress = settings.bluetoothAddress
+                        it.carAddress = btAddress
                         it.addAllSupportedPairingMethods(
                                 listOf(Control.BluetoothPairingMethod.A2DP,
                                         Control.BluetoothPairingMethod.HFP)
@@ -243,13 +313,9 @@ class ServiceDiscoveryResponse(private val context: Context)
                     }.build()
                 }.build()
                 services.add(bluetooth)
+                AppLog.i("[ServiceDiscovery] Announced Bluetooth service with carAddress: $btAddress")
             } else {
-                // What the omission costs, in the user's terms. Android Auto keeps telephony
-                // disabled until a hands-free link is up, and this is the message that tells the
-                // phone where to connect one - so a blank field is why calls stay on the phone.
-                AppLog.i("BT MAC Address is empty, so no Bluetooth service is announced. The phone " +
-                    "is not told where to connect hands-free, and Android Auto keeps phone calls " +
-                    "on the phone until it is")
+                AppLog.i("BT MAC Address is empty, so no Bluetooth service is announced.")
             }
 
             val mediaPlaybackStatus = Control.Service.newBuilder().also { service ->
@@ -258,13 +324,18 @@ class ServiceDiscoveryResponse(private val context: Context)
             }.build()
             services.add(mediaPlaybackStatus)
 
-            // Navigation Status Service — head unit receives turn-by-turn data from any AA nav app
+            // Navigation Status Service — turn-by-turn data and icon codes
             val navigationStatus = Control.Service.newBuilder().also { service ->
                 service.id = Channel.ID_NAV
-                service.navigationStatusService = Control.Service.NavigationStatusService.newBuilder()
-                    .setMinimumIntervalMs(1000)
-                    .setType(Control.Service.NavigationStatusService.ClusterType.ImageCodesOnly)
-                    .build()
+                service.navigationStatusService = Control.Service.NavigationStatusService.newBuilder().apply {
+                    setMinimumIntervalMs(500)
+                    setType(Control.Service.NavigationStatusService.ClusterType.ImageCodesOnly)
+                    setImageOptions(Control.Service.NavigationStatusService.ImageOptions.newBuilder().apply {
+                        setWidth(256)
+                        setHeight(256)
+                        setColourDethBits(32)
+                    }.build())
+                }.build()
             }.build()
             services.add(navigationStatus)
 

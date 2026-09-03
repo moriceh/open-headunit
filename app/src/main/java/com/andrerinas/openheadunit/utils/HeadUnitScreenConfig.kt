@@ -389,13 +389,37 @@ object HeadUnitScreenConfig {
     }
 
     fun getHeightMargin(): Int {
-        val margin = ((getAdjustedHeight() - screenHeightPx) / scaleFactor).roundToInt()
-        return margin.coerceAtLeast(0)
+        if (screenWidthPx <= 0 || screenHeightPx <= 0) return 0
+        val screenRatio = screenWidthPx.toFloat() / screenHeightPx.toFloat()
+        val videoW = getNegotiatedWidth().toFloat()
+        val videoH = getNegotiatedHeight().toFloat()
+        if (videoW <= 0 || videoH <= 0) return 0
+        val videoRatio = videoW / videoH
+
+        return if (screenRatio > videoRatio + 0.01f) {
+            // Screen is wider than video (e.g. 1920x720 screen with 8:3 ratio vs 16:9 video in 1080p or 720p)
+            val activeH = (videoW / screenRatio).roundToInt()
+            (videoH.toInt() - activeH).coerceAtLeast(0)
+        } else {
+            0
+        }
     }
 
     fun getWidthMargin(): Int {
-        val margin = ((getAdjustedWidth() - screenWidthPx) / scaleFactor).roundToInt()
-        return margin.coerceAtLeast(0)
+        if (screenWidthPx <= 0 || screenHeightPx <= 0) return 0
+        val screenRatio = screenWidthPx.toFloat() / screenHeightPx.toFloat()
+        val videoW = getNegotiatedWidth().toFloat()
+        val videoH = getNegotiatedHeight().toFloat()
+        if (videoW <= 0 || videoH <= 0) return 0
+        val videoRatio = videoW / videoH
+
+        return if (screenRatio < videoRatio - 0.01f) {
+            // Screen is taller/narrower than video
+            val activeW = (videoH * screenRatio).roundToInt()
+            (videoW.toInt() - activeW).coerceAtLeast(0)
+        } else {
+            0
+        }
     }
 
     private fun divideOrOne(numerator: Float, denominator: Float): Float {
@@ -403,39 +427,23 @@ object HeadUnitScreenConfig {
     }
 
     fun getScaleX(): Float {
-        if (forcedScale) {
-            return 1.0f
-        }
-
-        if (getNegotiatedWidth() > screenWidthPx) {
-            return divideOrOne(getNegotiatedWidth().toFloat(), screenWidthPx.toFloat())
-        }
-        if (isPortraitScaled) {
-            return divideOrOne(getAspectRatio(), (screenWidthPx.toFloat() / screenHeightPx.toFloat()))
+        if (forcedScale) return 1.0f
+        val marginW = getWidthMargin()
+        if (marginW > 0 && getNegotiatedWidth() > 0) {
+            val activeW = getNegotiatedWidth() - marginW
+            return if (activeW > 0) getNegotiatedWidth().toFloat() / activeW.toFloat() else 1.0f
         }
         return 1.0f
     }
-        // Stretch option PR #259
+
     fun getScaleY(): Float {
-        if (forcedScale) {
-            return 1.0f
+        if (forcedScale) return 1.0f
+        val marginH = getHeightMargin()
+        if (marginH > 0 && getNegotiatedHeight() > 0) {
+            val activeH = getNegotiatedHeight() - marginH
+            return if (activeH > 0) getNegotiatedHeight().toFloat() / activeH.toFloat() else 1.0f
         }
-
-        if (getNegotiatedHeight() > screenHeightPx) {
-            return if (stretchToFill) {
-                // Before PR #233 Fix scaler Y
-                divideOrOne(getNegotiatedHeight().toFloat(), screenHeightPx.toFloat())
-            } else {
-                // After PR #233 Fix scaler Y
-                divideOrOne((screenWidthPx.toFloat() / screenHeightPx.toFloat()), getAspectRatio())
-            }
-        }
-
-        if (isPortraitScaled) {
-            return 1.0f
-        }
-
-        return divideOrOne((screenWidthPx.toFloat() / screenHeightPx.toFloat()), getAspectRatio())
+        return 1.0f
     }
 
     fun getDensityDpi(): Int {

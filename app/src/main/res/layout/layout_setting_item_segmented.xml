@@ -89,6 +89,25 @@
             android:checkable="true"
             tools:text="Headunit Server" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnOption4"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="-2dp"
+            android:textSize="12sp"
+            android:textAllCaps="false"
+            android:padding="2dp"
+            android:minHeight="54dp"
+            android:gravity="center"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            app:strokeWidth="2dp"
+            app:strokeColor="@color/segmented_button_stroke_selector"
+            android:checkable="true"
+            tools:text="Blink" />
+
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -36,4 +36,15 @@
     <usb-device class="239" subclass="4" protocol="1" />    <!-- IAD -->
     <usb-device class="8" subclass="6" protocol="1" />      <!-- MTP over mass storage -->
 
+    <!--
+        MS9120/MS912x/MS9132 HDMI cluster dongles. Listing them here makes Open Headunit a declared
+        handler, so the OS auto-attaches on (re)plug and remembers the "always allow" permission -
+        the dongle stops re-prompting for USB permission on every launch / re-plug. UsbAttachedActivity
+        finishes immediately for these (they fail isAndroidDevice), so the AA accessory-switch path is
+        never attempted; only Ms9120Manager's own receiver handles them.
+    -->
+    <usb-device vendor-id="21325" product-id="24609" />      <!-- 0x534D:0x6021 MS9120/MS912x -->
+    <usb-device vendor-id="21325" product-id="3281" />       <!-- 0x534D:0x0821 MS912x -->
+    <usb-device vendor-id="13407" product-id="37170" />      <!-- 0x345F:0x9132 MS9132 -->
+
 </resources>

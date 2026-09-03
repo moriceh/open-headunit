@@ -48,6 +48,7 @@ class NightMode(private val settings: Settings, val hasGPSLocation: Boolean) {
                 }
                 Settings.NightMode.CAR_SIGNAL -> false // Handled directly in NightModeManager
                 Settings.NightMode.LOCATION -> false // Handled directly in NightModeManager
+                Settings.NightMode.SYSTEM_UI -> settings.isSystemNight // Follow the system/tablet dark theme
             }
         }
 
@@ -67,6 +68,7 @@ class NightMode(private val settings: Settings, val hasGPSLocation: Boolean) {
             Settings.NightMode.SCREEN_BRIGHTNESS -> "NightMode: Brightness ($currentBrightness < ${settings.nightModeThresholdBrightness})"
             Settings.NightMode.CAR_SIGNAL -> "NightMode: Car ILL+ signal"
             Settings.NightMode.LOCATION -> "NightMode: Location (by area)"
+            Settings.NightMode.SYSTEM_UI -> "NightMode: System UI (${if (settings.isSystemNight) "NIGHT" else "DAY"})"
         }
     }
 

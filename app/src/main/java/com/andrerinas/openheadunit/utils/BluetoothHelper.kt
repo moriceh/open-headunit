@@ -8,9 +8,45 @@ import android.content.Context
 import android.os.Build
 import android.os.IBinder
 import com.andrerinas.openheadunit.App
+import com.andrerinas.openheadunit.utils.adb.AdbManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.lang.reflect.Constructor
 
 object BluetoothHelper {
+
+    fun setBluetoothEnabled(context: Context, enabled: Boolean, scope: CoroutineScope? = null) {
+        val action = if (enabled) "enable" else "disable"
+        AppLog.i("BluetoothHelper: Setting Bluetooth state -> $action")
+
+        // 1. Standard Android Adapter API
+        try {
+            val adapter = getBluetoothAdapter(context)
+            if (adapter != null) {
+                if (enabled && !adapter.isEnabled) {
+                    @Suppress("DEPRECATION")
+                    adapter.enable()
+                } else if (!enabled && adapter.isEnabled) {
+                    @Suppress("DEPRECATION")
+                    adapter.disable()
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.w("BluetoothHelper: Standard adapter $action failed: ${e.message}")
+        }
+
+        // 2. Privileged shell / Self-ADB fallback (cmd bluetooth_manager / svc bluetooth)
+        val cmd = "cmd bluetooth_manager $action 2>/dev/null || svc bluetooth $action 2>/dev/null"
+        try {
+            val targetScope = scope ?: CoroutineScope(Dispatchers.IO)
+            targetScope.launch(Dispatchers.IO) {
+                AdbManager.exec(context, cmd)
+            }
+        } catch (e: Exception) {
+            AppLog.w("BluetoothHelper: Shell $action failed: ${e.message}")
+        }
+    }
 
     fun getBluetoothAdapter(context: Context): BluetoothAdapter? {
         val settings = App.provide(context).settings
@@ -303,6 +339,31 @@ object BluetoothHelper {
             if (valStr.isNotEmpty() && isValidMacAddress(valStr)) {
                 AppLog.i("BluetoothHelper: Resolved hardware BT MAC $valStr from property $key")
                 return valStr.uppercase()
+            }
+        }
+
+        // 4. Fallback to settings / dumpsys commands
+        val shellCmds = listOf(
+            arrayOf("settings", "get", "secure", "bluetooth_address"),
+            arrayOf("getprop", "persist.sys.bt.mac"),
+            arrayOf("dumpsys", "bluetooth_manager")
+        )
+        for (cmd in shellCmds) {
+            var process: Process? = null
+            try {
+                process = Runtime.getRuntime().exec(cmd)
+                val out = process.inputStream.bufferedReader().use { it.readText() }
+                val match = Regex("(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})").find(out)
+                val candidate = match?.groupValues?.get(1)?.uppercase()
+                if (candidate != null && isValidMacAddress(candidate)) {
+                    AppLog.i("BluetoothHelper: Resolved BT MAC $candidate via ${cmd.joinToString(" ")}")
+                    return candidate
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { process?.errorStream?.close() } catch (_: Exception) {}
+                try { process?.outputStream?.close() } catch (_: Exception) {}
+                try { process?.destroy() } catch (_: Exception) {}
             }
         }
 

@@ -44,6 +44,7 @@ import com.andrerinas.openheadunit.utils.BluetoothAddressSeedPolicy
 import com.andrerinas.openheadunit.utils.BluetoothHelper
 import com.andrerinas.openheadunit.utils.DummyVpnPolicy
 import com.andrerinas.openheadunit.utils.ToastUtils
+import com.andrerinas.openheadunit.utils.ZlinkHelper
 import com.andrerinas.openheadunit.aap.protocol.messages.NightModeEvent
 import com.andrerinas.openheadunit.aap.protocol.proto.MediaPlayback
 import com.andrerinas.openheadunit.decoder.audio.MicRecorder
@@ -146,14 +147,11 @@ class AapService : Service() {
     }
     private var permanentFocusRequest: AudioFocusRequest? = null
 
-    private var lastAaMediaMetadata: MediaPlayback.MediaMetaData? = null
+    internal var lastAaMediaMetadata: MediaPlayback.MediaMetaData? = null
     private var lastAaPlaybackPositionMs: Long = 0L
     private var lastAaPlaybackIsPlaying: Boolean? = null
-    private var wasPlayingBeforeDisconnect = false
-    private var lastDisconnectTimestampMs = 0L
     private var mediaSessionIsPlaying = false
     private var mediaMetadataDecodeJob: Job? = null
-    private var autoResumePlaybackJob: Job? = null
     /** Decoded on a background thread in [scheduleApplyAaMediaMetadata]; reused for notification updates on position ticks. */
     private var cachedAaAlbumArtBitmap: Bitmap? = null
     private var settingsPrefs: SharedPreferences? = null
@@ -192,6 +190,15 @@ class AapService : Service() {
             if (key == Settings.KEY_MEDIA_VOLUME_OFFSET || key == Settings.KEY_ASSISTANT_VOLUME_OFFSET || key == Settings.KEY_NAVIGATION_VOLUME_OFFSET) {
                 serviceScope.launch(Dispatchers.Main) {
                     commManager.updateAudioGains()
+                }
+            }
+
+            // The Android Auto night-mode source changed (e.g. switched to "System (follow dark
+            // theme)"). Re-evaluate the live manager so it re-registers the listeners it needs and
+            // immediately re-sends the new night state to the phone.
+            if (key == "night-mode") {
+                serviceScope.launch(Dispatchers.Main) {
+                    nightModeManager?.resendCurrentState()
                 }
             }
         }
@@ -348,6 +355,22 @@ class AapService : Service() {
     private fun onAaMediaMetadataFromPhone(meta: MediaPlayback.MediaMetaData) {
         if (isDestroying) return
         lastAaMediaMetadata = meta
+        // Record now-playing arrival for the "first metadata N ms after AA connect" diagnostic
+        // (independent of settings), so we can tell slow-phone-push from our own suppression.
+        if (settings.enableMs9120Usb) {
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onMediaMetadataReceived(
+                meta.getSong(), meta.getArtist()
+            )
+        }
+        // "Now playing" toast on the MS9120 cluster. Independent of the media-session sync setting
+        // below; showMediaToast() no-ops when the dongle is down or the track didn't actually change.
+        // Album art (JPEG/PNG bytes) is passed when present so the toast can show a circular thumb.
+        if (settings.enableMs9120Usb && settings.ms9120ShowMediaToast) {
+            val art = if (meta.hasAlbumArt()) meta.getAlbumArt().toByteArray() else null
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.showMediaToast(
+                meta.getSong(), meta.getArtist(), art
+            )
+        }
         if (!App.provide(this).settings.syncMediaSessionWithAaMetadata) return
         // Avoid showing a previous track's art with new title/artist until decode finishes.
         cachedAaAlbumArtBitmap = null
@@ -550,6 +573,7 @@ class AapService : Service() {
 
                     // "Start on screen on" — triggers on every SCREEN_ON, designed for
                     // head units that never truly power off (quick boot / always-on).
+                    ZlinkHelper.startBootWatchdog(this@AapService, serviceScope)
                     if (settings.autoStartOnScreenOn) {
                         AppLog.i("WakeDetect: start-on-screen-on enabled, triggering auto-start")
                         onScreenOnAutoStart()
@@ -880,6 +904,10 @@ class AapService : Service() {
 
         // Handle immediate WiFi auto-start check (e.g. if already connected on boot/wake)
         WifiAutoStartReceiver.checkAndStart(this)
+        ZlinkHelper.startBootWatchdog(this, serviceScope)
+        if (settings.disableBtDuringProjection) {
+            BluetoothHelper.setBluetoothEnabled(this, true, serviceScope)
+        }
 
         // Initialize MediaSession early and set it active immediately.
         // This ensures media button routing works even BEFORE an AA connection,
@@ -959,7 +987,6 @@ class AapService : Service() {
                         sendBroadcast(Intent(ACTION_REQUEST_NIGHT_MODE_UPDATE).apply {
                             setPackage(packageName)
                         })
-                        maybeAutoResumePlaybackOnReconnect()
                     }
                     is CommManager.ConnectionState.Error -> {
                         // Nothing may be counted here, and nothing new may be hung off this branch.
@@ -980,47 +1007,6 @@ class AapService : Service() {
                     else -> {}
                 }
             }
-        }
-    }
-
-    private fun maybeAutoResumePlaybackOnReconnect() {
-        val settings = App.provide(this).settings
-        val now = SystemClock.elapsedRealtime()
-        val elapsedSinceDisconnect = now - lastDisconnectTimestampMs
-        val wasPlaying = wasPlayingBeforeDisconnect
-        wasPlayingBeforeDisconnect = false // Consume once so it doesn't fire again on subsequent events
-
-        val shouldResume = AutoResumePlaybackPolicy.shouldResume(
-            enabled = settings.autoResumePlaybackOnReconnect,
-            wasPlayingBeforeDisconnect = wasPlaying,
-            elapsedSinceDisconnectMs = elapsedSinceDisconnect
-        )
-
-        if (shouldResume) {
-            AppLog.i("AapService: Auto-resuming playback on reconnect (${elapsedSinceDisconnect}ms since disconnect)")
-            autoResumePlaybackJob?.cancel()
-            autoResumePlaybackJob = serviceScope.launch {
-                try {
-                    // Allow Android Auto on the phone time to settle and attach its media player session
-                    delay(1500L)
-                    if (!isActive || isDestroying) return@launch
-
-                    // Confirm that the connection is still alive and in TransportStarted before sending keys
-                    if (commManager.connectionState.value is CommManager.ConnectionState.TransportStarted) {
-                        AppLog.i("AapService: Dispatching auto-resume play key")
-                        commManager.sendKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY, true, null, "auto-resume")
-                        commManager.sendKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY, false, null, "auto-resume")
-                    } else {
-                        AppLog.w("AapService: Connection state changed before auto-resume could dispatch")
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    AppLog.e("AapService: Error while auto-resuming playback: ${e.message}", e)
-                }
-            }
-        } else {
-            AppLog.d("AapService: Skipping auto-resume playback (wasPlaying=$wasPlaying, elapsed=${elapsedSinceDisconnect}ms)")
         }
     }
 
@@ -1336,15 +1322,10 @@ class AapService : Service() {
         App.provide(this).carKeysManager.unregisterReceivers()
 
         if (!isDestroying) updateNotification()
-        autoResumePlaybackJob?.cancel()
-        autoResumePlaybackJob = null
         mediaMetadataDecodeJob?.cancel()
         mediaMetadataDecodeJob = null
         lastAaMediaMetadata = null
         lastAaPlaybackPositionMs = 0L
-        wasPlayingBeforeDisconnect = (lastAaPlaybackIsPlaying == true)
-        lastDisconnectTimestampMs = SystemClock.elapsedRealtime()
-        AppLog.i("AapService: Disconnected. wasPlayingBeforeDisconnect=$wasPlayingBeforeDisconnect")
         lastAaPlaybackIsPlaying = null
         cachedAaAlbumArtBitmap = null
         mediaNotification.cancel()
@@ -1972,8 +1953,6 @@ class AapService : Service() {
         isDestroying = true
         // Nothing else clears it here, and the manager outlives the service instance.
         selfLauncherManager.isActive = false
-        autoResumePlaybackJob?.cancel()
-        autoResumePlaybackJob = null
         mediaMetadataDecodeJob?.cancel()
         cachedAaAlbumArtBitmap = null
         mediaNotification.cancel()
@@ -2118,6 +2097,19 @@ class AapService : Service() {
                     wifiLauncherManager.startDiscovery(oneShot = true)
             }
             ACTION_STOP_WIRELESS         -> wifiLauncherManager.stop()
+            ACTION_RESTART_ZXW_BRIDGE    -> {
+                AppLog.i("AapService: Received ZXW bridge restart request")
+                userExitedAA = false
+                userExitCooldownUntil = 0L
+
+                val activeLauncher = wifiLauncherManager.active
+                if (activeLauncher is WifiLauncherNative) {
+                    activeLauncher.handshakeManager?.restartZxwBridge()
+                } else {
+                    AppLog.i("AapService: Active launcher is not WifiLauncherNative, re-activating from settings...")
+                    wifiLauncherManager.setActiveFromSettings(force = true)
+                }
+            }
             ACTION_NATIVE_AA_POKE        -> {
                 val mac = intent?.getStringExtra(EXTRA_MAC)
                 if (mac != null) {
@@ -2526,6 +2518,7 @@ class AapService : Service() {
         const val ACTION_BT_AUTO_START              = "com.andrerinas.openheadunit.ACTION_BT_AUTO_START"
         const val ACTION_START_WIRELESS_SCAN       = "com.andrerinas.openheadunit.ACTION_START_WIRELESS_SCAN"
         const val ACTION_STOP_WIRELESS             = "com.andrerinas.openheadunit.ACTION_STOP_WIRELESS"
+        const val ACTION_RESTART_ZXW_BRIDGE        = "com.andrerinas.openheadunit.ACTION_RESTART_ZXW_BRIDGE"
         const val ACTION_NATIVE_AA_POKE            = "com.andrerinas.openheadunit.ACTION_NATIVE_AA_POKE"
         const val ACTION_NEARBY_CONNECT             = "com.andrerinas.openheadunit.ACTION_NEARBY_CONNECT"
         const val ACTION_CHECK_USB                 = "com.andrerinas.openheadunit.ACTION_CHECK_USB"

@@ -73,6 +73,7 @@
          RECORD_AUDIO is actually granted, because claiming it without throws on Android 14+. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.USB_HOST" />
     <!--
         Only requested up to API 32. From API 33 (Android 13) a granted READ_LOGS makes the app a
         privileged logd reader, which routes every `logcat` spawn through LogcatManagerService: the
@@ -225,6 +226,17 @@
             </intent-filter>
         </service>
         <service android:name=".location.GpsLocationService" />
+
+        <service
+            android:name=".service.OpenHuNotificationService"
+            android:label="@string/title"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- AndroidX MediaButtonReceiver: Routes MEDIA_BUTTON intents to AapService
              on Android 8+ where implicit broadcasts to manifest-registered receivers

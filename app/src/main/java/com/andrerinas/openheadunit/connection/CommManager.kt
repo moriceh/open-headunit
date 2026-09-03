@@ -5,6 +5,12 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import com.andrerinas.openheadunit.aap.AapSslContext
 import com.andrerinas.openheadunit.aap.AapTransport
+import com.andrerinas.openheadunit.aap.ClusterOverlay
+import com.andrerinas.openheadunit.aap.ClusterVideoStreamer
+import com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager
+import com.andrerinas.openheadunit.input.KeyCode
+import com.andrerinas.openheadunit.aap.protocol.Channel
+import com.andrerinas.openheadunit.aap.protocol.messages.VideoFocusEvent
 import com.andrerinas.openheadunit.input.MediaKeyRoutingPolicy
 import com.andrerinas.openheadunit.decoder.audio.PlaybackFocusPolicy
 import com.andrerinas.openheadunit.utils.AppLog
@@ -531,6 +537,58 @@ class CommManager(
             }
             transport.startReading()
             _connectionState.emit(ConnectionState.TransportStarted)
+            if (settings.enableClusterVideo) {
+                if (settings.showClusterOnMainDisplay) {
+                    // Debug: render the dedicated cluster stream in a small floating window ON TOP
+                    // of the normal Android Auto projection, so both pictures are visible at once.
+                    //
+                    // The main stream is left completely alone - it keeps decoding on the shared
+                    // VideoDecoder to the main surface. The cluster is decoded into its OWN
+                    // MediaCodec + SurfaceView (ClusterOverlay), which is why the connection no
+                    // longer breaks the way it did when this mode tried to swap the streams into
+                    // the single shared decoder. If the little window shows a clean cluster picture
+                    // while the MS9120 dongle shows garbage, the fault is the USB path; if the
+                    // window is also broken, the cluster stream itself is.
+                    //
+                    // The MS9120 dongle is deliberately NOT attached in this mode - that is the
+                    // point of the test.
+                    ClusterVideoStreamer.frameListener = { data, offset, length ->
+                        ClusterOverlay.onUnit(data, offset, length)
+                    }
+                } else if (settings.enableMs9120Usb) {
+                    // MS9120 dongle is the cluster sink.
+                    com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onKeyframeNeeded = {
+                        _scope.launch {
+                            requestClusterKeyframe()
+                        }
+                    }
+                    ClusterVideoStreamer.frameListener = { data, offset, length ->
+                        com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onFrame(data, offset, length)
+                    }
+                    // Bring the dongle up (it may already be showing the idle screen) and switch it to
+                    // the live cluster pipeline for this session.
+                    com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.attach(context, settings)
+                    com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onAndroidAutoConnected()
+                } else if (settings.enableClusterVideoTcpDebug) {
+                    // Debug-only: forward the reassembled stream to an external player over TCP.
+                    ClusterVideoStreamer.onClientConnected = {
+                        // A VLC/ffplay client just opened the cluster TCP port. The phone is mid-GOP on
+                        // the cluster channel: a bare focus re-grant does not bring a keyframe forward,
+                        // so do the same release/regain cycle the main display uses for keyframes, on
+                        // the cluster channel. The release makes the phone tear the cluster sink down,
+                        // the regain makes it start a fresh stream: VPS/SPS/PPS + IDR.
+                        send(VideoFocusEvent(gain = false, unsolicited = false, channel = Channel.ID_VID_CLUSTER))
+                        _scope.launch {
+                            delay(400)
+                            send(VideoFocusEvent(gain = true, unsolicited = true, channel = Channel.ID_VID_CLUSTER))
+                        }
+                    }
+                    ClusterVideoStreamer.start(settings.clusterVideoTcpPort, _scope)
+                }
+            }
+            if (settings.disableBtDuringProjection) {
+                BluetoothHelper.setBluetoothEnabled(context, false, _scope)
+            }
         } catch (e: Exception) {
             _connectionState.emit(ConnectionState.Error("Start reading failed: ${e.message}"))
             disconnect()
@@ -616,6 +674,16 @@ class CommManager(
         // If not mapped, we use the original keyCode as the logical code.
         var logicalCode = settings.keyCodes.entries.find { it.value == keyCode }?.key ?: keyCode
 
+        // Local-only actions: a key mapped to "show music toast on HUD" re-triggers the
+        // MS9120 now-playing toast for the current track. Never forwarded to Android Auto.
+        if (logicalCode == KeyCode.KEYCODE_SHOW_MEDIA_TOAST) {
+            if (isPress) {
+                AppLog.i("CommManager: key mapped to show media toast on HUD (src=$source)")
+                Ms9120Manager.showCurrentToast()
+            }
+            return
+        }
+
         // 2. Proprietary Key Filtering
         // If the key is proprietary (internal ID > 1000) and NOT mapped, we drop it.
         // These keys are intended to be learned/mapped in the Keymap settings.
@@ -638,7 +706,7 @@ class CommManager(
         // Only media keys can be held back, so nothing else pays for the Bluetooth probe.
         if (isMedia) {
             val routing = settings.mediaKeyRouting
-            if (source != "auto-resume" && !MediaKeyRoutingPolicy.shouldForward(routing, true, btMediaLinkForKeys())) {
+            if (!MediaKeyRoutingPolicy.shouldForward(routing, true, btMediaLinkForKeys())) {
                 AppLog.v("CommManager: Not sending media key $logicalCode to Android Auto " +
                         "(routing=$routing, src=$source)")
                 return
@@ -823,6 +891,15 @@ class CommManager(
         _transport?.aapAudio?.restartAudio()
     }
 
+    private suspend fun requestClusterKeyframe() {
+        val transport = _transport ?: return
+        if (_connectionState.value !is ConnectionState.TransportStarted) return
+        AppLog.i("CommManager: Triggering cluster video focus cycle for IDR keyframe")
+        transport.send(VideoFocusEvent(gain = false, unsolicited = false, channel = Channel.ID_VID_CLUSTER))
+        delay(350)
+        transport.send(VideoFocusEvent(gain = true, unsolicited = true, channel = Channel.ID_VID_CLUSTER))
+    }
+
     // -----------------------------------------------------------------------------------------
     // Disconnect
     // -----------------------------------------------------------------------------------------
@@ -917,6 +994,13 @@ class CommManager(
             audioDecoder.stop()
 
             connection?.disconnect()
+            ClusterVideoStreamer.stop()
+            // Stop the cluster pipeline but keep the dongle up showing the idle screen, in case the
+            // user has MS9120 output enabled and will connect a phone again.
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.onAndroidAutoDisconnected()
+            if (settings.disableBtDuringProjection) {
+                BluetoothHelper.setBluetoothEnabled(context, true, _scope)
+            }
         } catch (e: Exception) {
             AppLog.e("doDisconnect error: ${e.message}")
         } finally {

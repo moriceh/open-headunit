@@ -512,12 +512,17 @@ class HomeFragment : Fragment() {
                     }
                 }
                 WifiLauncherMode.NATIVE -> { // Native AA
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    if (BluetoothHelper.externalBtEvidence != null) {
+                        triggerZxwReconnect()
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                         ContextCompat.checkSelfPermission(requireContext(), android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                         bluetoothPermissionLauncher.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
                     } else {
                         showNativeAaDeviceSelector()
                     }
+                }
+                WifiLauncherMode.BLINK -> {
+                    triggerZxwReconnect()
                 }
                 WifiLauncherMode.MANUAL -> { // Manual (0) -> Open List
                     val controller = findNavController()
@@ -551,7 +556,7 @@ class HomeFragment : Fragment() {
      *   maxGridW    = maxBtnSize * 2 + cell-padding * 4   (2 cols, padding each side)
      */
     private fun constrainPortraitGridWidth(rootView: View) {
-        val gridLayout = rootView.findViewById<View>(R.id.main_buttons_layout) as? android.widget.LinearLayout
+        val gridLayout = rootView.findViewById<android.widget.LinearLayout>(R.id.main_buttons_layout)
             ?: return
         val density = resources.displayMetrics.density
 
@@ -647,6 +652,18 @@ class HomeFragment : Fragment() {
             }
             portraitLayoutListener = null
         }
+    }
+
+    private fun triggerZxwReconnect() {
+        Toast.makeText(requireContext(), "📡 Reconnexion Android Auto sans fil...", Toast.LENGTH_SHORT).show()
+        (requireActivity() as? MainActivity)?.beginAutoConnect(
+            "manual ZXW/Blink reconnect",
+            MainActivity.ConnectionUiMode.OVERLAY
+        )
+        val intent = Intent(requireContext(), AapService::class.java).apply {
+            action = AapService.ACTION_RESTART_ZXW_BRIDGE
+        }
+        ContextCompat.startForegroundService(requireContext(), intent)
     }
 
     private fun showNativeAaDeviceSelector() {

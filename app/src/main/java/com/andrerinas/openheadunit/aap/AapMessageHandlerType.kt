@@ -12,7 +12,7 @@ internal class AapMessageHandlerType(
         recorder: MicRecorder,
         private val aapAudio: AapAudio,
         private val aapVideo: AapVideo,
-        settings: Settings,
+        private val settings: Settings,
         context: Context,
         onAaMediaMetadata: ((MediaPlayback.MediaMetaData) -> Unit)? = null,
         onAaPlaybackStatus: ((MediaPlayback.MediaPlaybackStatus) -> Unit)? = null) : AapMessageHandler {
@@ -38,12 +38,33 @@ internal class AapMessageHandlerType(
         // High priority for the smoothest possible display.
         if (message.channel == Channel.ID_VID) {
              if (aapVideo.process(message)) {
-                 // Send ACK AFTER processing
-                 if (msgType == 0 || msgType == 1) {
-                     transport.sendMediaAck(message.channel)
-                 }
+                 // Send ACK for flow control (each fragment received needs ACK)
+                 transport.sendMediaAck(message.channel)
                  return
              }
+        }
+
+        // 1.5 Try processing as Cluster/HUD Video stream (ID_VID_CLUSTER)
+        if (message.channel == Channel.ID_VID_CLUSTER) {
+            if (ClusterVideoStreamer.process(message)) {
+                // Send ACK for flow control (each fragment received needs ACK)
+                transport.sendMediaAck(message.channel)
+                return
+            }
+            // Not raw video data: a signaling message on the cluster channel (setup, start, stop,
+            // video focus). It must reach AapControl exactly like its main-channel twin, or the
+            // phone never gets its Config response and never starts the cluster stream.
+            if (msgType in 0..31 || msgType in 32768..32799 || msgType in 65504..65535) {
+                try {
+                    aapControl.execute(message)
+                } catch (e: Exception) {
+                    AppLog.e(e)
+                    throw AapMessageHandler.HandleException(e)
+                }
+                return
+            }
+            AppLog.e("Unknown msg_type on cluster channel: %d, flags: %d", msgType, flags)
+            return
         }
 
         // 2. Try processing as Audio stream (Speech, System, Media)

@@ -9,6 +9,7 @@ import com.andrerinas.openheadunit.aap.protocol.messages.DrivingStatusEvent
 import com.andrerinas.openheadunit.aap.protocol.messages.LocationUpdateEvent
 import com.andrerinas.openheadunit.aap.protocol.messages.MicrophoneResponse
 import com.andrerinas.openheadunit.aap.protocol.messages.ServiceDiscoveryResponse
+import com.andrerinas.openheadunit.aap.protocol.messages.VideoFocusEvent
 import com.andrerinas.openheadunit.aap.protocol.proto.Common
 import com.andrerinas.openheadunit.aap.protocol.proto.Control
 import com.andrerinas.openheadunit.aap.protocol.proto.Input
@@ -48,12 +49,34 @@ internal class AapControlMedia(
             Media.MsgType.MEDIA_MESSAGE_STOP_VALUE -> return mediaSinkStopRequest(message.channel)
             Media.MsgType.MEDIA_MESSAGE_VIDEO_FOCUS_REQUEST_VALUE -> {
                 val focusRequest = message.parse(Media.VideoFocusRequestNotification.newBuilder()).build()
-                AppLog.i("RX: Video Focus Request - mode: %s, reason: %s", focusRequest.mode, focusRequest.reason)
+                AppLog.i("RX: Video Focus Request - mode: %s, reason: %s, channel: %s", focusRequest.mode, focusRequest.reason, Channel.name(message.channel))
 
                 if (focusRequest.mode == Media.VideoFocusMode.VIDEO_FOCUS_NATIVE) {
-                    AppLog.i("Video Focus NATIVE received. User likely clicked Exit. Stopping transport.")
-                    aapTransport.wasUserExit = true
-                    aapTransport.stop()
+                    if (message.channel == Channel.ID_VID_CLUSTER) {
+                        // The phone revoking the cluster sink (nav app stopped, cluster display
+                        // hidden) must not tear down the whole session: only the main display's
+                        // focus loss is a "user clicked exit".
+                        AppLog.i("Cluster Video Focus NATIVE received. Cluster stream will stop, main session continues.")
+                    } else {
+                        AppLog.i("Video Focus NATIVE received. User likely clicked Exit. Stopping transport.")
+                        aapTransport.wasUserExit = true
+                        aapTransport.stop()
+                    }
+                } else if (focusRequest.mode == Media.VideoFocusMode.VIDEO_FOCUS_PROJECTED) {
+                    AppLog.i("Video Focus PROJECTED received. Confirming video focus gain on channel %s.", Channel.name(message.channel))
+                    // Confirm on the requesting channel - for the cluster channel this is what
+                    // tells the phone to actually start feeding the cluster sink.
+                    aapTransport.send(VideoFocusEvent(gain = true, unsolicited = false, channel = message.channel))
+                    if (message.channel == Channel.ID_VID) {
+                        val left = com.andrerinas.openheadunit.utils.HeadUnitScreenConfig.getLeftMargin()
+                        val top = com.andrerinas.openheadunit.utils.HeadUnitScreenConfig.getTopMargin()
+                        val right = com.andrerinas.openheadunit.utils.HeadUnitScreenConfig.getRightMargin()
+                        val bottom = com.andrerinas.openheadunit.utils.HeadUnitScreenConfig.getBottomMargin()
+                        if (left > 0 || top > 0 || right > 0 || bottom > 0) {
+                            aapTransport.send(com.andrerinas.openheadunit.aap.protocol.messages.UpdateUiConfigRequest(left, top, right, bottom))
+                            AppLog.i("[UI_DEBUG_FIX] Video Focus PROJECTED -> sent UpdateUiConfigRequest: L=$left T=$top R=$right B=$bottom")
+                        }
+                    }
                 }
                 return 0
             }
@@ -101,7 +124,20 @@ internal class AapControlMedia(
         aapTransport.send(msg)
 
         if (channel == Channel.ID_VID) {
+            AppLog.i("AapControl: Granting Main Video Focus on channel $channel (PROJECTED, unsolicited=false)")
+            val focusNotification = Media.VideoFocusNotification.newBuilder().apply {
+                mode = Media.VideoFocusMode.VIDEO_FOCUS_PROJECTED
+                unsolicited = false
+            }.build()
+            aapTransport.send(AapMessage(channel, Media.MsgType.MEDIA_MESSAGE_VIDEO_FOCUS_NOTIFICATION_VALUE, focusNotification))
             aapTransport.gainVideoFocus()
+        } else if (channel == Channel.ID_VID_CLUSTER) {
+            AppLog.i("AapControl: Granting Cluster Video Focus on channel $channel (PROJECTED, unsolicited=false)")
+            val focusNotification = Media.VideoFocusNotification.newBuilder().apply {
+                mode = Media.VideoFocusMode.VIDEO_FOCUS_PROJECTED
+                unsolicited = false
+            }.build()
+            aapTransport.send(AapMessage(channel, Media.MsgType.MEDIA_MESSAGE_VIDEO_FOCUS_NOTIFICATION_VALUE, focusNotification))
         }
 
         // Pushing AudioFocusNotification
@@ -118,7 +154,7 @@ internal class AapControlMedia(
     }
 
     private fun maxUnackedFor(channel: Int): Int {
-        if (channel == Channel.ID_VID) {
+        if (channel == Channel.ID_VID || channel == Channel.ID_VID_CLUSTER) {
             val softwareHevc =
                 aapTransport.settings.videoCodec == VideoDecoder.CodecType.H265.settingsValue &&
                         aapTransport.settings.forceSoftwareDecoding &&
@@ -161,6 +197,9 @@ internal class AapControlMedia(
                 return 0
             }
             AppLog.i("Video Sink Stopped -> Normal background/transition behavior")
+        } else if (channel == Channel.ID_VID_CLUSTER) {
+            AppLog.i("Cluster Video Sink Stopped -> Resetting MS9120 decoder for next session")
+            com.andrerinas.openheadunit.aap.ms9120.Ms9120Manager.resetDecoder()
         }
         return 0
     }
@@ -491,9 +530,9 @@ internal class AapControlGateway(
 
         when (message.channel) {
             Channel.ID_CTR -> return serviceControl.execute(message)
-            Channel.ID_INP -> return touchControl.execute(message)
+            Channel.ID_INP, Channel.ID_INP_CLUSTER -> return touchControl.execute(message)
             Channel.ID_SEN -> return sensorControl.execute(message)
-            Channel.ID_VID, Channel.ID_AUD, Channel.ID_AU1, Channel.ID_AU2, Channel.ID_MIC -> return mediaControl.execute(message)
+            Channel.ID_VID, Channel.ID_VID_CLUSTER, Channel.ID_AUD, Channel.ID_AU1, Channel.ID_AU2, Channel.ID_MIC -> return mediaControl.execute(message)
         }
         return 0
     }

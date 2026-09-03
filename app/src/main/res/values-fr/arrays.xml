@@ -9,6 +9,7 @@
         <item>Luminosité de l\'écran</item>
         <item>Signal des phares (ILL+)</item>
         <item>Emplacement (par zone)</item>
+        <item>Système (suivre le thème sombre)</item>
     </string-array>
 
     <string-array name="app_theme">
@@ -31,5 +32,12 @@
         <item>@string/orientation_landscape_reverse</item>
         <item>@string/orientation_portrait</item>
         <item>@string/orientation_portrait_reverse</item>
+    </string-array>
+
+    <!-- Labels traduits (les résolutions restent neutres dans values/arrays.xml). -->
+    <string-array name="ms9120_color_formats">
+        <item>YUV422 (2 o/pix, le plus rapide)</item>
+        <item>RGB888 (3 o/pix, qualité)</item>
+        <item>RGB565 (expérimental)</item>
     </string-array>
 </resources>

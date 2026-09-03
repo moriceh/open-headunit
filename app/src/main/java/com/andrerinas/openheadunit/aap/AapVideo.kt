@@ -265,7 +265,8 @@ internal class AapVideo(private val videoDecoder: VideoDecoder, private val sett
         return when (val action = decision.action) {
             is VideoFragmentAssembler.Action.DecodeWhole -> {
                 messageBuffer.clear()
-                videoDecoder.decode(buf, action.payloadOffset, len - action.payloadOffset, settings.forceSoftwareDecoding, settings.videoCodec)
+                val wholeLen = len - action.payloadOffset
+                videoDecoder.decode(buf, action.payloadOffset, wholeLen, settings.forceSoftwareDecoding, settings.videoCodec)
                 true
             }
 

@@ -12,6 +12,41 @@
 Open Headunit is an Android app that allows you to turn your Android tablet or phone into an Android Auto receiver. This project is a revived version of the original headunit project by the great Michael Reid. The original project can be found here:
 https://github.com/mikereidis/headunit
 
+## This fork
+
+This fork adds the following features on top of upstream Open Headunit:
+
+- **GT7 (Sz Choiceway / ZXW) Zlink headunit compatibility.**
+  The unit uses an external Bluetooth module driven by the "blink" daemon; this fork
+  connects to that module to use native Android Auto Wireless. Zlink must first be
+  disabled from the dedicated menu in the Open Headunit config screen.
+- **Mappable rotary controller.**
+  The unit's rotary encoder is exposed as a mappable knob (keymap screen).
+- **Android Auto cluster display output via MS9120 USB-HDMI dongle.**
+  The dedicated instrument-cluster video stream (received on the `ID_VID_CLUSTER` channel)
+  is decoded and pushed as live video to an MS912x HDMI dongle over USB,
+  with its own settings block: resolution, color format, frame skipping, and stretch.
+- **Optional track-info toast on the instrument cluster.**
+  A now-playing card (title / artist / album art) is overlaid on the cluster video,
+  crossfading between tracks and following the same aspect/scale as the picture.
+- **Optional TCP debug streaming of the raw cluster stream.**
+  The un-decoded cluster stream can be sent over TCP to VLC / ffplay / OBS for debugging.
+  The codec (H.264 or H.265) is the one negotiated with the phone under Open Headunit's
+  video settings.
+- **Background Service Mode (guaranteed boot).**
+  A `NotificationListenerService` keeps the app alive and restarts it as a foreground
+  service on the head unit even after a reboot, where normal auto-start is unreliable.
+  Enable it in Settings under **"Background Service Mode (Guaranteed Boot)"** by granting
+  Open Headunit *Notification access* in the system settings.
+- **"Follow system" dark mode for Android Auto.**
+  A new night-mode option that makes Android Auto's day/night theme follow the head
+  unit's own system dark/light setting, so it tracks the car's theme automatically
+  instead of a fixed schedule, sensor, or car signal.
+- **Disable Bluetooth during Android Auto.**
+  An option that switches the head unit's own Bluetooth off while a projection is
+  active (and back on when it ends), so the car's native system keeps handling
+  phone calls instead of the AA link — avoiding OEM call popups and hang-ups.
+
 ## NOTE!
 **Android Auto 17.4 and newer breaks almost all third-party wireless triggers including Self-Mode and the automated launch via Wireless Helper.**
 Google has introduced internal changes preventing projection from launching automatically without the native developer server or hardware dongles. To connect wirelessly or run in Self-Mode on AA 17.4+, please use one of the 4 options below:
@@ -82,10 +117,6 @@ adb shell am start -a android.intent.action.VIEW -d "headunit://connect?ip=192.1
 - more customization options for the UI and the app itself
 
 ## Changelog
-### v.3.3.1-alpha
-- Added: Option to auto-resume media playback on quick reconnect if music was playing before disconnect
-- Fixed: Errors shown in playconsole
-
 ### v.3.3.0
 - Begin for theming of the App.
 - Refactor WiFi-Code from AapService into their own classes for better maintenance, thanks to @MrEAlderson

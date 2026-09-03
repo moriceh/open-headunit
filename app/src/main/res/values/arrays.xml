@@ -8,6 +8,7 @@
         <item>Screen Brightness</item>
         <item>Car Headlight Signal (ILL+)</item>
         <item>Location (by area)</item>
+        <item>System (follow dark theme)</item>
     </string-array>
 
     <string-array name="app_theme">
@@ -31,6 +32,29 @@
         <item>@string/orientation_landscape_reverse</item>
         <item>@string/orientation_portrait</item>
         <item>@string/orientation_portrait_reverse</item>
+    </string-array>
+
+    <!-- MS9120 output resolutions, in the same order Ms9120Resolution.entries is presented
+         (the dropdown maps position -> Settings.Ms9120Resolution.entries[position]). -->
+    <string-array name="ms9120_resolutions">
+        <item>720p (1280x720)</item>
+        <item>1080p (1920x1080)</item>
+        <item>WUXGA (1680x1050)</item>
+        <item>HD+ (1366x768)</item>
+        <item>768 (1280x768)</item>
+        <item>XGA (1024x768)</item>
+        <item>SVGA (800x600)</item>
+        <item>576p (720x576)</item>
+        <item>480p (720x480)</item>
+        <item>480 (640x480)</item>
+    </string-array>
+
+    <!-- MS9120 wire color formats, mapped to Ms9120ColorFormat entries by position:
+         0 = YUV422, 1 = RGB888, 2 = RGB565. -->
+    <string-array name="ms9120_color_formats">
+        <item>YUV422 (fastest)</item>
+        <item>RGB888 (quality)</item>
+        <item>RGB565 (experimental)</item>
     </string-array>
 
 </resources>

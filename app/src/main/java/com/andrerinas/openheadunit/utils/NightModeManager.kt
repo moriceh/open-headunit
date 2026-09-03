@@ -36,6 +36,7 @@ class NightModeManager(
     private var isSensorRegistered = false
     private var isObserverRegistered = false
     private var isCarSignalObserverRegistered = false
+    private var isUiModeReceiverRegistered = false
     
     private val handler = Handler(Looper.getMainLooper())
 
@@ -80,6 +81,23 @@ class NightModeManager(
         }
     }
 
+    // Re-evaluate when the system dark/light theme changes (e.g. the tablet's dark mode).
+    // The configuration-change broadcast arrives BEFORE this background service's own
+    // Resources.getSystem().configuration has been refreshed, so a synchronous read still sees
+    // the old day/night value and emits nothing — which is why it used to wait up to a minute
+    // for the next time tick. Re-evaluate a few times over the next ~2s so whichever read is
+    // the first to see the refreshed configuration picks up the flip; the per-minute tick
+    // remains as the ultimate fallback.
+    private val uiModeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (settings.nightMode != Settings.NightMode.SYSTEM_UI) return
+            AppLog.d("NightModeManager: configuration change, re-reading system night mode (delayed)")
+            handler.postDelayed({ update(debounce = false) }, 250)
+            handler.postDelayed({ update(debounce = false) }, 750)
+            handler.postDelayed({ update(debounce = false) }, 1500)
+        }
+    }
+
     fun start() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_TIME_TICK)
@@ -111,6 +129,10 @@ class NightModeManager(
             context.contentResolver.unregisterContentObserver(carSignalObserver)
             isCarSignalObserverRegistered = false
         }
+        if (isUiModeReceiverRegistered) {
+            try { context.unregisterReceiver(uiModeReceiver) } catch (_: Exception) {}
+            isUiModeReceiverRegistered = false
+        }
         handler.removeCallbacks(debounceRunnable)
     }
 
@@ -126,6 +148,24 @@ class NightModeManager(
     }
 
     private fun refreshListeners() {
+        // 0. System UI-mode change broadcast (dark/light theme) — re-reads the system night
+        // mode after a short delay so the process configuration has caught up with the flip.
+        if (settings.nightMode == Settings.NightMode.SYSTEM_UI) {
+            if (!isUiModeReceiverRegistered) {
+                ContextCompat.registerReceiver(
+                    context, uiModeReceiver,
+                    IntentFilter(Intent.ACTION_CONFIGURATION_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+                isUiModeReceiverRegistered = true
+            }
+        } else {
+            if (isUiModeReceiverRegistered) {
+                try { context.unregisterReceiver(uiModeReceiver) } catch (_: Exception) {}
+                isUiModeReceiverRegistered = false
+            }
+        }
+
         // 1. Light Sensor
         if (settings.nightMode == Settings.NightMode.LIGHT_SENSOR) {
             if (!isSensorRegistered && lightSensor != null) {
@@ -237,6 +277,13 @@ class NightModeManager(
                     AppLog.w("NightModeManager: CAR_SIGNAL key 'car_mode' not present; keeping previous state")
                     isNight = lastEmittedValue ?: false
                 }
+            }
+            Settings.NightMode.SYSTEM_UI -> {
+                // Follow the device's own dark-theme setting (the system UI mode), so Android
+                // Auto's night mode tracks e.g. a tablet switched to dark mode. Re-evaluated live
+                // by the ui-mode configuration-change receiver when the user flips it.
+                isNight = settings.isSystemNight
+                AppLog.d("NightModeManager: SYSTEM_UI isSystemNight=$isNight")
             }
             // Delegate to standard calculator for other modes (Auto, Day, Night, Manual)
             else -> {

@@ -188,6 +188,21 @@ class QuickSettingsFragment : DialogFragment() {
             }
         ))
 
+        // Now-playing toast on the MS9120 cluster — only shown while the dongle is active.
+        if (settings.enableMs9120Usb) {
+            items.add(SettingItem.ToggleSettingEntry(
+                stableId = "ms9120ShowMediaToast",
+                nameResId = R.string.ms9120_show_media_toast_title,
+                descriptionResId = R.string.ms9120_show_media_toast_desc,
+                isChecked = settings.ms9120ShowMediaToast,
+                onCheckedChanged = { isChecked ->
+                    settings.ms9120ShowMediaToast = isChecked
+                    settings.commit()
+                    updateSettingsList()
+                }
+            ))
+        }
+
         // --- System & Safety ---
         items.add(SettingItem.CategoryHeader("system", R.string.category_automation))
 

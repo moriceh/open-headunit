@@ -293,11 +293,12 @@ class SettingsAdapter : ListAdapter<SettingItem, RecyclerView.ViewHolder>(Settin
         private val btn1: com.google.android.material.button.MaterialButton = itemView.findViewById(R.id.btnOption1)
         private val btn2: com.google.android.material.button.MaterialButton = itemView.findViewById(R.id.btnOption2)
         private val btn3: com.google.android.material.button.MaterialButton = itemView.findViewById(R.id.btnOption3)
+        private val btn4: com.google.android.material.button.MaterialButton = itemView.findViewById(R.id.btnOption4)
 
         fun bind(setting: SettingItem.SegmentedButtonSettingEntry) {
             settingName.setText(setting.nameResId)
 
-            val buttons = listOf(btn1, btn2, btn3)
+            val buttons = listOf(btn1, btn2, btn3, btn4)
             val visibleButtons = buttons.filterIndexed { index, _ -> index < setting.options.size }
 
             buttons.forEachIndexed { index, button ->

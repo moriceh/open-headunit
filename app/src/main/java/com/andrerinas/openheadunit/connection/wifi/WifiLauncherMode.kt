@@ -1,6 +1,7 @@
 package com.andrerinas.openheadunit.connection.wifi
 
 import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherAuto
+import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherBlink
 import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherHelper
 import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherManual
 import com.andrerinas.openheadunit.connection.wifi.modes.WifiLauncherNative
@@ -12,11 +13,12 @@ enum class WifiLauncherMode(
     MANUAL(0, ::WifiLauncherManual),
     AUTO(1, ::WifiLauncherAuto),
     HELPER(2, ::WifiLauncherHelper),
-    NATIVE(3, ::WifiLauncherNative);
+    NATIVE(3, ::WifiLauncherNative),
+    BLINK(4, ::WifiLauncherBlink);
 
     companion object {
 
-        val DEFAULT: WifiLauncherMode = NATIVE
+        val DEFAULT: WifiLauncherMode = HELPER
 
 
         fun byIdOrDefault(id: Int): WifiLauncherMode {

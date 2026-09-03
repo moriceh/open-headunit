@@ -100,6 +100,73 @@ class Settings(private val context: Context) {
         get() = prefs.getBoolean("use_measured_touch_surface", false)
         set(value) { prefs.edit().putBoolean("use_measured_touch_surface", value).apply() }
 
+    var autoKillZlink: Boolean
+        get() = prefs.getBoolean("auto_kill_zlink", false)
+        set(value) { prefs.edit().putBoolean("auto_kill_zlink", value).apply() }
+
+    var disableBtDuringProjection: Boolean
+        get() = prefs.getBoolean("disable_bt_during_projection", false)
+        set(value) { prefs.edit().putBoolean("disable_bt_during_projection", value).apply() }
+
+    var enableClusterVideo: Boolean
+        get() = prefs.getBoolean("enable_cluster_video", false)
+        set(value) { prefs.edit().putBoolean("enable_cluster_video", value).apply() }
+
+    var clusterVideoResolution: String
+        get() = prefs.getString("cluster_video_resolution", "1280x720") ?: "1280x720"
+        set(value) { prefs.edit().putString("cluster_video_resolution", value).apply() }
+
+    // Density the phone lays out the cluster UI at. 0 = automatic (fall back to 160, the previous
+    // hardcoded value). Takes effect on the next AA connection.
+    var clusterVideoDpi: Int
+        get() = prefs.getInt("cluster_video_dpi", 0)
+        set(value) { prefs.edit().putInt("cluster_video_dpi", value).apply() }
+
+    var clusterVideoTcpPort: Int
+        get() = prefs.getInt("cluster_video_tcp_port", 5000)
+        set(value) { prefs.edit().putInt("cluster_video_tcp_port", value).apply() }
+
+    // Debug-only: forward the reassembled cluster stream to an external player over TCP. Mutually
+    // exclusive with the MS9120 USB output below — when either is enabled it wins the stream.
+    var enableClusterVideoTcpDebug: Boolean
+        get() = prefs.getBoolean("enable_cluster_video_tcp_debug", false)
+        set(value) { prefs.edit().putBoolean("enable_cluster_video_tcp_debug", value).apply() }
+
+    // MS9120 USB video output. The cluster stream is decoded (MediaCodec) and pushed to a
+    // MacroSilicon MS9120/MS912x/MS9132 HDMI dongle over USB. Wins over the TCP debug sink.
+    var enableMs9120Usb: Boolean
+        get() = prefs.getBoolean("enable_ms9120_usb", false)
+        set(value) { prefs.edit().putBoolean("enable_ms9120_usb", value).apply() }
+
+    var ms9120Resolution: Ms9120Resolution
+        get() = Ms9120Resolution.fromValue(prefs.getInt("ms9120_resolution", Ms9120Resolution.RES_720P.value))
+        set(value) { prefs.edit().putInt("ms9120_resolution", value.value).apply() }
+
+    var ms9120ColorFormat: Ms9120ColorFormat
+        get() = Ms9120ColorFormat.fromCode(prefs.getInt("ms9120_color_format", Ms9120ColorFormat.YUV422.code))
+        set(value) { prefs.edit().putInt("ms9120_color_format", value.code).apply() }
+
+    var ms9120FrameSkip: Boolean
+        get() = prefs.getBoolean("ms9120_frame_skip", true)
+        set(value) { prefs.edit().putBoolean("ms9120_frame_skip", value).apply() }
+
+    // Debug-only: render the dedicated cluster stream to the main tablet projection surface instead
+    // of the main Android Auto stream, to isolate whether a bad picture is the MS9120 USB path or the
+    // cluster stream itself. Wins over both the MS9120 and TCP sinks when on. Off by default.
+    var showClusterOnMainDisplay: Boolean
+        get() = prefs.getBoolean("debug_show_cluster_on_main", false)
+        set(value) { prefs.edit().putBoolean("debug_show_cluster_on_main", value).apply() }
+
+    var ms9120Stretch: Boolean
+        get() = prefs.getBoolean("ms9120_stretch", true)
+        set(value) { prefs.edit().putBoolean("ms9120_stretch", value).apply() }
+
+    // When the now-playing track changes, draw a centred toast (title + artist) on the MS9120
+    // cluster screen for a few seconds. On by default.
+    var ms9120ShowMediaToast: Boolean
+        get() = prefs.getBoolean("ms9120_show_media_toast", true)
+        set(value) { prefs.edit().putBoolean("ms9120_show_media_toast", value).apply() }
+
     // UI Scale percentage for Home
     var uiScaleHomePercent: Int
         get() = prefs.getInt("ui-scale-home-percent", 100)
@@ -145,13 +212,6 @@ class Settings(private val context: Context) {
         get() = prefs.getBoolean(KEY_SYNC_MEDIA_SESSION_AA_METADATA, false)
         set(value) {
             prefs.edit().putBoolean(KEY_SYNC_MEDIA_SESSION_AA_METADATA, value).apply()
-        }
-
-    /** Auto-resume media playback on quick reconnect if music was playing before disconnect. */
-    var autoResumePlaybackOnReconnect: Boolean
-        get() = prefs.getBoolean(KEY_AUTO_RESUME_PLAYBACK_ON_RECONNECT, false)
-        set(value) {
-            prefs.edit().putBoolean(KEY_AUTO_RESUME_PLAYBACK_ON_RECONNECT, value).apply()
         }
 
     /**
@@ -1103,6 +1163,48 @@ class Settings(private val context: Context) {
         }
     }
 
+    /**
+     * HDMI output resolution of an MS9120 dongle. The chip does not scale: the decoded frame is
+     * converted to [width]x[height] and the VIC selects the output timing. Stored by [value]
+     * (an arbitrary id, not the wire VIC) so reordering the list cannot change a stored meaning.
+     * The list mirrors the reference MS9120 player app.
+     */
+    enum class Ms9120Resolution(val value: Int, val width: Int, val height: Int, val vic: Int, val label: String) {
+        RES_720P(0, 1280, 720, 79, "720p (1280×720)"),
+        RES_480P(1, 720, 480, 2, "480p (720×480)"),
+        RES_576P(2, 720, 576, 17, "576p (720×576)"),
+        RES_480(3, 640, 480, 64, "480 (640×480)"),
+        RES_SVGA(4, 800, 600, 66, "SVGA (800×600)"),
+        RES_XGA(5, 1024, 768, 71, "XGA (1024×768)"),
+        RES_768(6, 1280, 768, 84, "768 (1280×768)"),
+        RES_HDPLUS(7, 1366, 768, 102, "HD+ (1366×768)"),
+        RES_WUXGA(8, 1680, 1050, 120, "WUXGA (1680×1050)"),
+        RES_1080P(9, 1920, 1080, 129, "1080p (1920×1080)");
+
+        companion object {
+            private val map = values().associateBy(Ms9120Resolution::value)
+            fun fromValue(value: Int): Ms9120Resolution = map[value] ?: RES_720P
+        }
+    }
+
+    /**
+     * Pixel format on the MS9120 USB bulk wire. [code] is the colorspace value written into the
+     * chip's video-in command (nibble low of the color byte), as defined by the reference app:
+     * RGB565=0, RGB888=1 (read as BGR on the wire), YUV422=2 (UYVY, fastest). [bytesPerPixel] is
+     * the frame size factor. Default YUV422: ~33% fewer bytes than RGB888 and the native path
+     * avoids an RGB conversion entirely.
+     */
+    enum class Ms9120ColorFormat(val code: Int, val bytesPerPixel: Int) {
+        RGB565(0, 2),
+        RGB888(1, 3),
+        YUV422(2, 2);
+
+        companion object {
+            private val map = values().associateBy(Ms9120ColorFormat::code)
+            fun fromCode(code: Int): Ms9120ColorFormat = map[code] ?: YUV422
+        }
+    }
+
     enum class ConnectionKind(val value: Int) {
         UNSET(-1),
         USB_CABLE(0),
@@ -1145,13 +1247,31 @@ class Settings(private val context: Context) {
         LIGHT_SENSOR(4),
         SCREEN_BRIGHTNESS(5),
         CAR_SIGNAL(6),
-        LOCATION(7);
+        LOCATION(7),
+        SYSTEM_UI(8);
 
         companion object {
             private val map = NightMode.values().associateBy(NightMode::value)
             fun fromInt(value: Int) = map[value]
         }
     }
+
+    /**
+     * Whether the system (e.g. the tablet's "Dark theme") is currently in night mode.
+     * Reads the resolved configuration UI mode; returns `false` when undeterminable.
+     */
+    val isSystemNight: Boolean
+        get() {
+            // Use the SYSTEM resources, not the app context: AppCompatDelegate.setDefaultNightMode
+            // (driven by the app's own theme) rewrites the app process's Configuration.uiMode,
+            // so context.resources.configuration would report the app theme, not the device's
+            // dark-theme setting. Resources.getSystem() is the pre-app configuration and reflects
+            // the actual system UI night mode.
+            val cfg = android.content.res.Resources.getSystem().configuration
+            return cfg.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
 
     var nightModeManualStart: Int
         get() = prefs.getInt("night-mode-manual-start", 1140) // Default 19:00 (19 * 60)
@@ -1242,7 +1362,6 @@ class Settings(private val context: Context) {
 
         /** SharedPreferences key; also used by [com.andrerinas.openheadunit.aap.AapService] for change listener. */
         const val KEY_SYNC_MEDIA_SESSION_AA_METADATA = "sync-media-session-aa-metadata"
-        const val KEY_AUTO_RESUME_PLAYBACK_ON_RECONNECT = "auto-resume-playback-on-reconnect"
 
         /** SharedPreferences key; also used by [com.andrerinas.openheadunit.aap.AapService] for change listener. */
         const val KEY_LOG_LEVEL = "log-level"

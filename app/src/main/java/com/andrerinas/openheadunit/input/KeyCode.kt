@@ -6,6 +6,10 @@ import com.andrerinas.openheadunit.utils.AppLog
 
 object KeyCode {
 
+    /** Custom logical key: show the MS9120 now-playing toast for the current track. Not a real
+     *  Android keycode — intercepted locally and never forwarded to Android Auto. */
+    const val KEYCODE_SHOW_MEDIA_TOAST = 65539
+
     val supported = listOf(
         // Standard Android KeyEvents used in the convert method or common
         KeyEvent.KEYCODE_SOFT_LEFT,
@@ -56,7 +60,8 @@ object KeyCode {
         224, // KEYCODE_WAKEUP → Voice Command
         264, 265, 267, // STEM_PRIMARY, STEM_1, STEM_3 (steering wheel)
         268, 269, 270, 271, // Rotary controller
-        65536, 65537, 65538 // Rotary controller
+        65536, 65537, 65538, // Rotary controller
+        65539, // "Show music toast on HUD" — local action only, never sent to AA
     ).distinct().sorted()
 
     val KeyEvent.isMediaSessionKey: Boolean

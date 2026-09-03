@@ -73,3 +73,15 @@ else()
 endif()
 
 target_link_libraries(hur_soft_hevc PRIVATE ${log-lib} ${android-lib})
+
+
+# =========================================================================
+# Target 3: yuv_converter (MS9120 cluster YUV420 -> wire format)
+# =========================================================================
+
+add_library(yuv_converter SHARED yuv_converter.cpp)
+
+target_compile_features(yuv_converter PRIVATE cxx_std_17)
+target_link_libraries(yuv_converter PRIVATE log)
+
+

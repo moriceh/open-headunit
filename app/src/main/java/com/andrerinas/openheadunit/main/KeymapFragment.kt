@@ -18,6 +18,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.andrerinas.openheadunit.R
 import com.andrerinas.openheadunit.contract.KeyIntent
+import com.andrerinas.openheadunit.input.KeyCode
 import com.andrerinas.openheadunit.utils.AppLog
 import com.andrerinas.openheadunit.utils.IntentFilters
 import com.andrerinas.openheadunit.utils.Settings
@@ -63,7 +64,11 @@ class KeymapFragment : Fragment(), MainActivity.KeyListener {
         KeymapItem(R.string.key_home, KeyEvent.KEYCODE_HOME),
         KeymapItem(R.string.key_app_switch, KeyEvent.KEYCODE_APP_SWITCH),
         KeymapItem(R.string.key_button_a, KeyEvent.KEYCODE_BUTTON_A),
-        KeymapItem(R.string.key_button_b, KeyEvent.KEYCODE_BUTTON_B)
+        KeymapItem(R.string.key_button_b, KeyEvent.KEYCODE_BUTTON_B),
+        KeymapItem(R.string.key_show_media_toast, KeyCode.KEYCODE_SHOW_MEDIA_TOAST),
+        // Rotary encoder scroll actions (SOFT_LEFT/RIGHT trigger ScrollWheelEvent in AA)
+        KeymapItem(R.string.key_rotary_left, KeyEvent.KEYCODE_SOFT_LEFT),
+        KeymapItem(R.string.key_rotary_right, KeyEvent.KEYCODE_SOFT_RIGHT)
     )
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -115,9 +120,9 @@ class KeymapFragment : Fragment(), MainActivity.KeyListener {
     private fun showAssignDialog(item: KeymapItem) {
         assignTargetCode = item.keyCode
         val name = getString(item.nameResId)
-        
-        // Using MaterialAlertDialogBuilder with DarkAlertDialog style for consistency and compatibility
-        assignDialog = MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
+        val hasMappingAlready = settings.keyCodes.containsKey(item.keyCode)
+
+        val builder = MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
             .setTitle(name)
             .setMessage(getString(R.string.press_key_to_assign, name))
             .setNegativeButton(R.string.cancel) { dialog, _ ->
@@ -128,7 +133,24 @@ class KeymapFragment : Fragment(), MainActivity.KeyListener {
                 assignTargetCode = KeyEvent.KEYCODE_UNKNOWN
                 assignDialog = null
             }
-            .create()
+
+        // Show a Delete button only when a mapping already exists for this action
+        if (hasMappingAlready) {
+            builder.setNeutralButton(R.string.delete_mapping) { _, _ ->
+                val codesMap = settings.keyCodes
+                codesMap.remove(item.keyCode)
+                settings.keyCodes = codesMap
+                adapter.updateCodes(codesMap)
+                val targetName = getString(item.nameResId)
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.mapping_deleted, targetName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        assignDialog = builder.create()
 
         // Important: We need to set the listener on the dialog to catch keys like ENTER
         assignDialog?.setOnKeyListener { _, _, event ->
