@@ -1443,50 +1443,58 @@ class SettingsFragment : Fragment() {
             ))
         }
 
-        items.add(SettingItem.SettingEntry(
-            stableId = "zlinkManagement",
-            nameResId = R.string.zlink_management,
-            value = getString(R.string.zlink_management_desc),
-            searchKeywords = "zlink zlink5 z-link choiceway zxw daemon kill disable restore",
-            onClick = { showZlinkManagementDialog() }
-        ))
+        // These four are only meaningful on a Choiceway/ZXW (Blink) unit, detected by the same
+        // external-BT evidence that gates the Self-ADB hotspot toggle above. On any other unit they
+        // would be inert (the OEM Zlink stack does not exist there, BT is not the AA bridge, the
+        // guaranteed-boot service has nothing extra to keep up), so the whole section is hidden.
+        if (NativeAaHandshakeManager.externalBtDiagnostic() != null) {
+            items.add(SettingItem.CategoryHeader("zxwHeadunit", R.string.zxw_headunit_category))
 
-        items.add(SettingItem.ToggleSettingEntry(
-            stableId = "autoKillZlink",
-            nameResId = R.string.zlink_auto_kill_title,
-            descriptionResId = R.string.zlink_auto_kill_desc,
-            isChecked = settings.autoKillZlink,
-            onCheckedChanged = { checked ->
-                settings.autoKillZlink = checked
-                updateSettingsList()
-            }
-        ))
+            items.add(SettingItem.SettingEntry(
+                stableId = "zlinkManagement",
+                nameResId = R.string.zlink_management,
+                value = getString(R.string.zlink_management_desc),
+                searchKeywords = "zlink zlink5 z-link choiceway zxw daemon kill disable restore",
+                onClick = { showZlinkManagementDialog() }
+            ))
 
-        items.add(SettingItem.ToggleSettingEntry(
-            stableId = "disableBtDuringProjection",
-            nameResId = R.string.disable_bt_during_projection_title,
-            descriptionResId = R.string.disable_bt_during_projection_desc,
-            isChecked = settings.disableBtDuringProjection,
-            onCheckedChanged = { checked ->
-                settings.disableBtDuringProjection = checked
-                if (!checked) {
-                    BluetoothHelper.setBluetoothEnabled(requireContext(), true)
+            items.add(SettingItem.ToggleSettingEntry(
+                stableId = "autoKillZlink",
+                nameResId = R.string.zlink_auto_kill_title,
+                descriptionResId = R.string.zlink_auto_kill_desc,
+                isChecked = settings.autoKillZlink,
+                onCheckedChanged = { checked ->
+                    settings.autoKillZlink = checked
+                    updateSettingsList()
                 }
-                updateSettingsList()
-            }
-        ))
+            ))
 
-        val isServiceModeEnabled = OpenHuNotificationService.isEnabled(requireContext())
-        items.add(SettingItem.SettingEntry(
-            stableId = "openHuServiceMode",
-            nameResId = R.string.openhu_service_mode_title,
-            value = getString(if (isServiceModeEnabled) R.string.openhu_service_mode_active else R.string.openhu_service_mode_inactive),
-            searchKeywords = "service boot notification listener background autostart zlinktobap",
-            onClick = {
-                OpenHuNotificationService.openNotificationSettings(requireContext())
-                Toast.makeText(requireContext(), R.string.openhu_service_mode_toast, Toast.LENGTH_LONG).show()
-            }
-        ))
+            items.add(SettingItem.ToggleSettingEntry(
+                stableId = "disableBtDuringProjection",
+                nameResId = R.string.disable_bt_during_projection_title,
+                descriptionResId = R.string.disable_bt_during_projection_desc,
+                isChecked = settings.disableBtDuringProjection,
+                onCheckedChanged = { checked ->
+                    settings.disableBtDuringProjection = checked
+                    if (!checked) {
+                        BluetoothHelper.setBluetoothEnabled(requireContext(), true)
+                    }
+                    updateSettingsList()
+                }
+            ))
+
+            val isServiceModeEnabled = OpenHuNotificationService.isEnabled(requireContext())
+            items.add(SettingItem.SettingEntry(
+                stableId = "openHuServiceMode",
+                nameResId = R.string.openhu_service_mode_title,
+                value = getString(if (isServiceModeEnabled) R.string.openhu_service_mode_active else R.string.openhu_service_mode_inactive),
+                searchKeywords = "service boot notification listener background autostart zlinktobap",
+                onClick = {
+                    OpenHuNotificationService.openNotificationSettings(requireContext())
+                    Toast.makeText(requireContext(), R.string.openhu_service_mode_toast, Toast.LENGTH_LONG).show()
+                }
+            ))
+        }
 
         // Ungated, unlike the static BSSID above: this address is announced as carAddress in
         // every connection mode, and the setup QR's own refusal deep-links here by searching for

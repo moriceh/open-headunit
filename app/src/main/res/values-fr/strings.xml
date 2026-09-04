@@ -1122,6 +1122,7 @@
     <string name="zlink_access_mode">🔐 Accès privilégié: %s</string>
     <string name="disable_bt_during_projection_title">Désactiver le Bluetooth pendant Android Auto</string>
     <string name="disable_bt_during_projection_desc">Couper le Bluetooth dès qu\'Android Auto est connecté pour éviter les conflits d\'appels OEM, et le réactiver à la déconnexion</string>
+    <string name="zxw_headunit_category">Réglages unité ZXW (Choiceway)</string>
     <string name="cluster_display_category">Affichage du cluster</string>
     <string name="enable_cluster_video_title">Flux vidéo secondaire (HUD / Compteur)</string>
     <string name="enable_cluster_video_desc">Annoncer un deuxième écran à Android Auto pour la navigation Google Maps au combiné d\'instruments</string>

@@ -700,6 +700,7 @@
     <string name="zlink_access_mode">🔐 Privileged access: %s</string>
     <string name="disable_bt_during_projection_title">Disable Bluetooth during Android Auto</string>
     <string name="disable_bt_during_projection_desc">Turn off Bluetooth while connected to prevent OEM call popups and hang-ups, and re-enable it upon disconnection</string>
+    <string name="zxw_headunit_category">ZXW Headunit Settings</string>
     <string name="cluster_display_category">Cluster display</string>
     <string name="enable_cluster_video_title">Secondary Video Stream (HUD / Cluster)</string>
     <string name="enable_cluster_video_desc">Announce secondary display to Android Auto for Google Maps navigation cluster view</string>
