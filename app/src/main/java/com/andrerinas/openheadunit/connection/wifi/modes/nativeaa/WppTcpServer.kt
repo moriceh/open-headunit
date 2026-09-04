@@ -203,7 +203,21 @@ class WppTcpServer(
                 }
             }
 
-            runExchange(output, inbound)
+            // A re-dial of the control channel while the projection is already up is not a new
+            // session. Re-running the exchange would send a fresh WifiStartRequest that the phone
+            // reads as "reconfigure this Wi-Fi" — but it has already done so — so it closes the
+            // live AAP socket and the whole session flaps every ten seconds. Hold the channel open
+            // (answering pings) instead of re-handshaking; the projection keeps its own 5288
+            // connection. The guard is read at connect time, before the exchange.
+            if (callbacks.projectionSessionUp()) {
+                AppLog.i(
+                    "WppTcpServer: projection already up — holding the re-dialled control channel " +
+                        "open without re-running the handshake"
+                )
+                holdOpen(output, inbound)
+            } else {
+                runExchange(output, inbound)
+            }
         } catch (e: Exception) {
             // The class and the cause, not just the message: a TLS refusal arrives here as an
             // outer "connection closed" with the real reason - the alert, the missing certificate,

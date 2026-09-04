@@ -1524,8 +1524,20 @@ class AapService : Service() {
                 userExitedAA = true
             }
 
-            App.provide(this@AapService).audioDecoder.stop()
-            App.provide(this@AapService).videoDecoder.stop("AapService::onDisconnect")
+            // This coroutine has spent its time awaiting the old session's disconnect and
+            // restarting the hotspot. By the time it reaches here the phone may already have
+            // reconnected, in which case the decoders are the *new* session's - a single shared
+            // instance, not one per session. Stopping it would kill the fresh connection's
+            // decoder mid-stream, leaving the projection feeding frames into a stopped
+            // decoder: black on the main display until a recovery keyframe arrives, tens of
+            // seconds later. So only tear the decoders down when no session is up or coming up;
+            // a live connection owns them now and must be left alone.
+            if (commManager.isConnected) {
+                AppLog.i("AapService: a session is already connected; leaving the decoders running for it")
+            } else {
+                App.provide(this@AapService).audioDecoder.stop()
+                App.provide(this@AapService).videoDecoder.stop("AapService::onDisconnect")
+            }
         }
 
         // [FIX] Set cooldown flag for ALL user exits (not just USB).
