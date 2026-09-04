@@ -446,8 +446,8 @@ object Ms9120Manager {
 
     private fun showIdleFrame(msDevice: MS9120Device) {
         val ctx = context ?: return
-        val w = msDevice.inputRes.width
-        val h = msDevice.inputRes.height
+        val w = msDevice.transferWidth
+        val h = msDevice.transferHeight
         val buffer = frameBuffer
         if (buffer.size != msDevice.framePixelsBytes) return
 
@@ -481,8 +481,11 @@ object Ms9120Manager {
         if (buf.size != msDevice.framePixelsBytes) return false
         // The card bitmap is the full cluster-source frame; guard its own dimensions are sane
         // (the resampler is bounded by card.fullW x card.fullH, independent of the dongle output).
-        val fw = msDevice.inputRes.width
-        val fh = msDevice.inputRes.height
+        // fw is the ROW PITCH in pixels (transferWidth), not just the visible width — the composite
+        // indexes the buffer as (outRow * fw + col), so it must match the width the frame was
+        // written at, or the toast lands on the wrong rows.
+        val fw = msDevice.transferWidth
+        val fh = msDevice.transferHeight
         if (card.fullW <= 0 || card.fullH <= 0) return false
 
         // Fade in at the start and fade out at the end. fade=255 -> fully opaque card; fade=0 ->
@@ -724,9 +727,9 @@ object Ms9120Manager {
         try {
             val src = cardSourceRes(msDevice)
             AppLog.i(
-                "MS9120: toast src=${src.first}x${src.second} out=${msDevice.inputRes.width}x${msDevice.inputRes.height} " +
+                "MS9120: toast src=${src.first}x${src.second} out=${msDevice.transferWidth}x${msDevice.transferHeight} " +
                     "clusterSrc=${clusterSrcW}x${clusterSrcH} stretch=${device?.stretch} " +
-                    "region=${videoDisplayRegion(msDevice.inputRes.width, msDevice.inputRes.height)}"
+                    "region=${videoDisplayRegion(msDevice.transferWidth, msDevice.transferHeight)}"
             )
             val card = renderMediaCard(ctx, src.first, src.second, t, a, albumArt)
             // If the previous toast is still up, keep it so the album-art region can crossfade
@@ -825,7 +828,7 @@ object Ms9120Manager {
         val w = clusterSrcW
         val h = clusterSrcH
         return if (w > 0 && h > 0) Pair(w, h)
-        else Pair(msDevice.inputRes.width, msDevice.inputRes.height)
+        else Pair(msDevice.transferWidth, msDevice.transferHeight)
     }
 
     /**
@@ -1162,25 +1165,43 @@ object Ms9120Manager {
                         AppLog.i(
                             "MS9120: decoded frame image=${image.width}x${image.height} " +
                                 "clusterSrc=${clusterSrcW}x${clusterSrcH} " +
-                                "out=${msDevice.inputRes.width}x${msDevice.inputRes.height} " +
+                                "out=${msDevice.transferWidth}x${msDevice.transferHeight} (native ${msDevice.inputRes.width}x${msDevice.inputRes.height}) " +
                                 "stretch=${msDevice.stretch}"
                         )
                     }
-                    try {
-                        YuvConverter.convert(
-                            image,
-                            msDevice.wireFormat,
-                            frameBuffer,
-                            msDevice.inputRes.width,
-                            msDevice.inputRes.height,
-                            msDevice.stretch
-                        )
-                        lastDecodedFrameMs = SystemClock.elapsedRealtime()
-                        synchronized(frameLock) {
-                            pendingFrame = frameBuffer.copyOf()
-                        }
-                    } finally {
+                    // Back-pressure: the sender thread is a USB bulk transfer and runs far slower
+                    // than the decoder for large frames (e.g. 1080p RGB888 ~6.2 MB/frame). Without
+                    // this, every decoded frame would be converted and copied (6 MB) even though
+                    // the sender can only ship a few per second — the overflow allocations GC the
+                    // whole process ("the app becomes extremely slow"). When frameSkip is on and a
+                    // frame is already queued for the sender, skip the convert+copy for this frame.
+                    // The decoder still decodes it (the output buffer was released above and every
+                    // input unit is still queued), so the P-frame reference chain stays intact; we
+                    // only drop the presentation of a frame we could not ship in time.
+                    val frameAlreadyQueued = if (msDevice.frameSkip) {
+                        synchronized(frameLock) { pendingFrame != null }
+                    } else {
+                        false
+                    }
+                    if (frameAlreadyQueued) {
                         image.close()
+                    } else {
+                        try {
+                            YuvConverter.convert(
+                                image,
+                                msDevice.wireFormat,
+                                frameBuffer,
+                                msDevice.transferWidth,
+                                msDevice.transferHeight,
+                                msDevice.stretch
+                            )
+                            lastDecodedFrameMs = SystemClock.elapsedRealtime()
+                            synchronized(frameLock) {
+                                pendingFrame = frameBuffer.copyOf()
+                            }
+                        } finally {
+                            image.close()
+                        }
                     }
                 } else {
                     imageNulls++

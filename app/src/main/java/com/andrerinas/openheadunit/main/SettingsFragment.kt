@@ -1895,13 +1895,39 @@ class SettingsFragment : Fragment() {
                     nameResId = R.string.ms9120_resolution_title,
                     value = pendingMs9120Resolution!!.label,
                     onClick = {
+                        // 1080p at 3 bytes/pixel (RGB888) is ~6.2 MB/frame: it exceeds this
+                        // dongle's USB bulk + SDRAM budget, so the app thrashes and the picture
+                        // flickers. 1080p is only valid for the 2-byte formats (YUV422 / RGB565).
+                        // A standard setSingleChoiceItems cannot grey out a row, so build a small
+                        // adapter that renders the 1080p entry disabled when RGB888 is the active
+                        // format, instead of rejecting the tap with a toast.
+                        val disabledIndex = if (pendingMs9120ColorFormat == Settings.Ms9120ColorFormat.RGB888) {
+                            resValues.indexOf(Settings.Ms9120Resolution.RES_1080P)
+                        } else -1
+                        val selectedIndex = resValues.indexOf(pendingMs9120Resolution!!)
+                        val adapter = object : android.widget.ArrayAdapter<Settings.Ms9120Resolution>(
+                            requireContext(),
+                            android.R.layout.select_dialog_singlechoice,
+                            resValues
+                        ) {
+                            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                                val row = super.getView(position, convertView, parent) as android.widget.CheckedTextView
+                                row.text = resValues[position].label
+                                val enabled = position != disabledIndex
+                                row.isEnabled = enabled
+                                row.alpha = if (enabled) 1f else 0.4f
+                                row.isChecked = position == selectedIndex
+                                return row
+                            }
+                        }
                         MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
                             .setTitle(R.string.ms9120_resolution_title)
-                            .setSingleChoiceItems(resLabels, resValues.indexOf(pendingMs9120Resolution!!)) { dialog, which ->
+                            .setAdapter(adapter) { dialog, which ->
+                                if (which == disabledIndex) return@setAdapter
                                 pendingMs9120Resolution = resValues[which]
                                 checkChanges()
-                                dialog.dismiss()
                                 updateSettingsList()
+                                dialog.dismiss()
                             }
                             .show()
                     }
@@ -1921,7 +1947,16 @@ class SettingsFragment : Fragment() {
                         MaterialAlertDialogBuilder(requireContext(), R.style.DarkAlertDialog)
                             .setTitle(R.string.ms9120_color_format_title)
                             .setSingleChoiceItems(colorLabels, colorValues.indexOf(pendingMs9120ColorFormat!!)) { dialog, which ->
-                                pendingMs9120ColorFormat = colorValues[which]
+                                val pickedFormat = colorValues[which]
+                                pendingMs9120ColorFormat = pickedFormat
+                                // Moving to RGB888 makes the 1080p mode invalid (see the resolution
+                                // picker): fall back to 720p so a "Save" can never apply the
+                                // 1080p + RGB888 combination that thrashes the dongle.
+                                if (pickedFormat == Settings.Ms9120ColorFormat.RGB888 &&
+                                    pendingMs9120Resolution == Settings.Ms9120Resolution.RES_1080P
+                                ) {
+                                    pendingMs9120Resolution = Settings.Ms9120Resolution.RES_720P
+                                }
                                 checkChanges()
                                 dialog.dismiss()
                                 updateSettingsList()

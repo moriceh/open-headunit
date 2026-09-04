@@ -164,9 +164,33 @@ class MS9120Device(
      */
     var stretch: Boolean = false
 
+    /**
+     * The width, in pixels, that every input ROW is actually written at (and that must be reported
+     * to set_video_in / set_video_out so the report matches the data).
+     *
+     * The MS91xx chip requires each input row to be 4-byte aligned: for 2 bytes/pixel formats
+     * (YUV422/RGB565) that means an even width, and for RGB888 (3 bytes/pixel) a width divisible
+     * by 4. Most resolutions already satisfy this; the exception is 1366 with RGB888 (1366*3 =
+     * 4098, not a multiple of 4). For that combination we widen the frame to the next multiple of
+     * 4 (1366 -> 1368) so the data rows are 4-byte aligned: the frameBuffer is transferWidth*height
+     * *bpp, YuvConverter writes to dstWidth=transferWidth, and both set_video_in and set_video_out
+     * report transferWidth — exactly what the reference app does (it crops the source to the 4
+     * aligned width before converting). Using any other width desynchronises the row pitch from the
+     * report and shears the whole frame into a parallelogram ("italic").
+     */
+    val transferWidth: Int
+        get() {
+            val w = inputRes.width
+            return if (w * wireFormat.bytesPerPixel % 4 != 0) (w + 3) and 3.inv() else w
+        }
+
+    /** Height of an input frame; the chip never needs a height aligned to 4. */
+    val transferHeight: Int
+        get() = inputRes.height
+
     /** Size of a full frame in bytes, according to the source resolution and format. */
     val framePixelsBytes: Int
-        get() = inputRes.width * inputRes.height * wireFormat.bytesPerPixel
+        get() = transferWidth * transferHeight * wireFormat.bytesPerPixel
 
     private fun logDiag(msg: String) {
         AppLog.d("MS9120: $msg")
@@ -406,9 +430,13 @@ class MS9120Device(
         sleep(50)
 
         // Source-frame size (the chip places it on the output canvas).
-        val inW = inputRes.width
-        val inH = inputRes.height
-        val inW4 = (inW + 3) and 3.inv()   // width aligned to 4, like the official app
+        // transferWidth is the width every input row is actually written at (see the property):
+        // it is the true width unless the row isn't 4-byte aligned (1366*3 RGB888 -> 1368). Both
+        // set_video_in AND set_video_out must report the SAME width that the data rows use — the
+        // reference app reports its aligned crop width to both — otherwise the chip places the
+        // frame in a corner of the canvas and shears it.
+        val inW = transferWidth
+        val inH = transferHeight
         setTransferModeFrame()
 
         // Packed color field: (memory colorspace << 4) | wire format.
@@ -416,12 +444,12 @@ class MS9120Device(
         val wireColor = wireFormat.code
         val colorIn = (memColor shl 4) or wireColor
         val colorOut = getDisplayColorSpace()          // register 51 (default 0 on HDMI)
-        logDiag("Source: ${inW}x${inH}, format=${wireFormat.name} (${wireFormat.bytesPerPixel} o/px), frame=${framePixelsBytes} o")
+        logDiag("Source: ${inW}x${inH} (native ${inputRes.width}x${inputRes.height}), format=${wireFormat.name} (${wireFormat.bytesPerPixel} o/px), frame=${framePixelsBytes} o")
         logDiag("Colors: in=0x%02X (mem=%d wire=%d), out=%d".format(colorIn, memColor, wireColor, colorOut))
         // The chip DOES NOT scale: the HDMI output must have the same resolution as the input,
         // otherwise the frame is placed in a corner of the canvas and the rest is corrupted.
-        setVideoIn(inW4, inH, colorIn, byteSel = 0)
-        setVideoOut(inputRes.vic, colorOut, inputRes.width, inputRes.height)
+        setVideoIn(inW, inH, colorIn, byteSel = 0)
+        setVideoOut(inputRes.vic, colorOut, inW, inH)
         setTransfer(true)
         sleep(50)
 
