@@ -2306,10 +2306,16 @@ class AapService : Service() {
                 }
 
                 val activeLauncher = wifiLauncherManager.active
-                if (activeLauncher is WifiLauncherNative) {
+                if (activeLauncher is WifiLauncherNative && activeLauncher.handshakeManager?.isActive() == true) {
+                    // The manager is running with its listeners open, so the phone already has a
+                    // live route to us: dropping the current 3152 socket makes it re-dial cleanly.
                     activeLauncher.handshakeManager?.restartZxwBridge()
                 } else {
-                    AppLog.i("AapService: Active launcher is not WifiLauncherNative, re-activating from settings...")
+                    // Either no launcher is active, or the manager is stopped / its listeners are
+                    // closed. rearmAfterSessionEnd() is a no-op once isRunning is false (as it is
+                    // after a user-exit stop()), so a stopped manager has to be fully restarted to
+                    // bring the 5299 listener and the Blink bridge loop back.
+                    AppLog.i("AapService: Launcher not actively listening — re-activating Native AA from settings.")
                     wifiLauncherManager.setActiveFromSettings(force = true)
                 }
             }
